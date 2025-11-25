@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+data/eyecon.db
+.env
+.vscode/
+
+# Ignoriere eingebetteten EyeCon-Ordner
+EyeCon/

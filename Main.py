@@ -6,19 +6,16 @@ Diese Datei startet die Anwendung mit einem einfachen leeren Hauptfenster.
 
 import sys
 from PySide6.QtWidgets import QApplication, QMainWindow
-
-
-def main() -> None:
-    """Startet die EyeCon-Anwendung mit einem leeren Hauptfenster."""
-    app = QApplication(sys.argv)
-
-    hauptfenster = QMainWindow()
-    hauptfenster.setWindowTitle("EyeCon")
-    hauptfenster.setMinimumSize(800, 600)
-    hauptfenster.show()
-
-    sys.exit(app.exec())
+from app_layout import AppLayout
 
 
 if __name__ == "__main__":
-    main()
+    app = QApplication(sys.argv)
+
+    win = QMainWindow()
+    win.setWindowTitle("Layout Prototype")
+    win.resize(1200, 800)
+    win.setCentralWidget(AppLayout())
+    win.show()
+
+    sys.exit(app.exec())

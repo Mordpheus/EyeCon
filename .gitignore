@@ -7,3 +7,6 @@ data/eyecon.db
 
 # Ignoriere eingebetteten EyeCon-Ordner
 EyeCon/
+
+# Dokumentation (lokal nur)
+TODO.md

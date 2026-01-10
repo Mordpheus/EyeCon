@@ -1,0 +1,13 @@
+[
+  {
+    "id": 1,
+    "name": "Max",
+    "nachname": "Neumann",
+    "geburtsdatum": "15.03.1990",
+    "ext_id": null,
+    "erstellt_am": "2026-01-10T21:58:26.788136",
+    "messungen": [
+      1
+    ]
+  }
+]

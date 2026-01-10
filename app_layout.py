@@ -2,6 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
 
 
 # -------------------------------------------------
@@ -10,6 +11,8 @@ from PySide6.QtCore import Qt
 class LeftArea(QWidget):
     def __init__(self):
         super().__init__()
+        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -20,17 +23,12 @@ class LeftArea(QWidget):
 
         self.setFixedWidth(220)
 
-        # Vertikaler Farbverlauf (hell → dunkel)
-        self.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(
-                    x1:0, y1:0,
-                    x2:0, y2:1,
-                    stop:0 #9bbcf0,
-                    stop:1 #5f8fdc
-                );
-            }
-        """)
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, QColor("#9bbcf0"))
+        grad.setColorAt(1.0, QColor("#5f8fdc"))
+        painter.fillRect(self.rect(), grad)
 
 
 # -------------------------------------------------
@@ -39,6 +37,8 @@ class LeftArea(QWidget):
 class CenterArea(QWidget):
     def __init__(self):
         super().__init__()
+        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -47,17 +47,12 @@ class CenterArea(QWidget):
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
-        # Vertikaler Farbverlauf (hellgrau → dunkler)
-        self.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(
-                    x1:0, y1:0,
-                    x2:0, y2:1,
-                    stop:0 #f3f3f3,
-                    stop:1 #d9d9d9
-                );
-            }
-        """)
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, QColor("#f3f3f3"))
+        grad.setColorAt(1.0, QColor("#d9d9d9"))
+        painter.fillRect(self.rect(), grad)
 
 
 # -------------------------------------------------
@@ -66,6 +61,8 @@ class CenterArea(QWidget):
 class RightArea(QWidget):
     def __init__(self):
         super().__init__()
+        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -76,17 +73,12 @@ class RightArea(QWidget):
 
         self.setFixedWidth(260)
 
-        # Vertikaler Farbverlauf (hellgrün → dunkler)
-        self.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(
-                    x1:0, y1:0,
-                    x2:0, y2:1,
-                    stop:0 #cfe6a4,
-                    stop:1 #a6c96a
-                );
-            }
-        """)
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        grad = QLinearGradient(0, 0, 0, self.height())
+        grad.setColorAt(0.0, QColor("#cfe6a4"))
+        grad.setColorAt(1.0, QColor("#a6c96a"))
+        painter.fillRect(self.rect(), grad)
 
 
 # -------------------------------------------------

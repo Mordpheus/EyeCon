@@ -1,6 +1,6 @@
 # EyeCon
 
-Einfache PySide6-Desktopanwendung für Video-Vorschau und Sitzungsverwaltung.
+Einfache Prototyp-Desktopanwendung für Video-Vorschau und Sitzungsverwaltung.
 
 Schnellstart (PowerShell):
 

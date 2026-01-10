@@ -1,9 +1,9 @@
-"""Test-Skript für Iteration 2.1: PatientButton Grundstruktur"""
+"""Test-Skript für Iteration 2.1 & 2.2: PatientButton Basics + Styling"""
 import sys
 from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout
 from patient_widgets import PatientButton
 
-print("=== Iteration 2.1: PatientButton Grundstruktur-Test ===\n")
+print("=== Iteration 2.1 & 2.2: PatientButton Struktur + Styling-Test ===\n")
 
 app = QApplication(sys.argv)
 
@@ -26,16 +26,29 @@ test_patients = [
 ]
 
 window = QWidget()
-window.setWindowTitle("Iteration 2.1: PatientButton Test")
+window.setWindowTitle("Iteration 2.2: PatientButton Styling Test")
 layout = QVBoxLayout()
 
+buttons = []
 for patient_data in test_patients:
     btn = PatientButton(patient_data)
+    buttons.append(btn)
     layout.addWidget(btn)
     print(f"✓ PatientButton erstellt für: {patient_data['nachname']}, {patient_data['name']}")
+
+print("\n--- Styling Test ---")
+print("✓ Button 1 (Mustermann): Standard (nicht selektiert) = Grau")
+buttons[0].set_selected(False)
+
+print("✓ Button 2 (Schmidt): Selektiert = Grün")
+buttons[1].set_selected(True)
+
+print("\n✓ Fenster wird angezeigt mit Styling.")
+print("  - Graue Button = nicht selektiert")
+print("  - Grüne Button = selektiert")
+print("  - Hover-Effekt beim Überfahren mit Maus\n")
 
 window.setLayout(layout)
 window.show()
 
-print("\n✓ Fenster angezeigt. (Zum Schließen Fenster schließen)")
 sys.exit(app.exec())

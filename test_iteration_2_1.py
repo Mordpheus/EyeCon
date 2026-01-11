@@ -31,7 +31,7 @@ layout = QVBoxLayout()
 
 # Label für Signal-Ausgaben
 signal_label = QLabel("Warte auf Klicks...")
-signal_label.setStyleSheet("background-color: #f0f0f0; padding: 10px; border-radius: 5px;")
+signal_label.setStyleSheet("background-color: #1e3a8a; color: white; padding: 10px; border-radius: 5px; font-weight: bold;")
 layout.addWidget(signal_label)
 
 buttons = []

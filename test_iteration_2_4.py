@@ -20,7 +20,7 @@ main_layout = QVBoxLayout()
 
 # Info-Label
 info_label = QLabel("Warte auf Auswahl...")
-info_label.setStyleSheet("background-color: #e3f2fd; padding: 10px; border-radius: 5px; font-weight: bold;")
+info_label.setStyleSheet("background-color: #1e3a8a; color: white; padding: 10px; border-radius: 5px; font-weight: bold;")
 main_layout.addWidget(info_label)
 
 # PatientListWidget

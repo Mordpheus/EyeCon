@@ -3,14 +3,17 @@ Patient-spezifische UI-Widgets für das Dashboard
 Iteration 2: UI-Komponenten
 
 Dependencies:
-- PySide6.QtWidgets: QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, QLineEdit, QMessageBox
+- PySide6.QtWidgets: QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, QLineEdit, QMessageBox, QLabel, QHBoxLayout
 - PySide6.QtCore: Qt, Signal
 - PySide6.QtGui: QFont, QColor
 """
-from PySide6.QtWidgets import QPushButton, QWidget, QVBoxLayout, QScrollArea
+from PySide6.QtWidgets import (
+    QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, 
+    QLineEdit, QMessageBox, QLabel, QHBoxLayout
+)
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class PatientButton(QPushButton):
@@ -314,7 +317,7 @@ class PatientListWidget(QWidget):
         1. Wenn bereits Patient selektiert: deselektiere ihn (set_selected(False))
         2. Selektiere neuen Patient (set_selected(True))
         3. Speichere neue Selektion in selected_patient_id
-        4. Emittiere patient_selected Signal
+        4. Sende patient_selected Signal
         
         Args:
             patient_id: ID des zu selektierenden Patienten
@@ -328,7 +331,7 @@ class PatientListWidget(QWidget):
             self.patient_buttons[patient_id].set_selected(True)
             self.selected_patient_id = patient_id
             
-            # === Signal-Emission ===
+            # === Signal-Senden durch emit() Funktion ===
             # Dependency: Signal.emit()
             # Benachrichtige Listener dass Patient ausgewählt wurde
             self.patient_selected.emit(patient_id)
@@ -348,3 +351,147 @@ class PatientListWidget(QWidget):
             patient_id: ID des geklickten Patienten
         """
         self.select_patient(patient_id)
+
+
+# === ITERATION 2.5: CreatePatientDialog ===
+# Dependencies:
+# - PySide6.QtWidgets: QDialog, QLineEdit, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QMessageBox
+# - PySide6.QtCore: Qt
+
+class CreatePatientDialog(QDialog):
+    """
+    Iteration 2.5: CreatePatientDialog - Modal Dialog zur Patient-Ersstellung
+    
+    Funktionen:
+    - Modal Dialog (blockiert Hauptfenster bis geschlossen)
+    - 3 Input-Felder: Vorname, Nachname, Geburtsdatum (dd.mm.yyyy)
+    - Validierung: Datumsformat und erforderliche Felder
+    - Gibt Dict mit Patientendaten oder None zurück
+    
+    Usage:
+        dialog = CreatePatientDialog(parent_widget)
+        if dialog.exec() == QDialog.Accepted:
+            patient_data = dialog.get_patient_data()
+            if patient_data:
+                # Patient erstellen mit patient_data
+    """
+    
+    def __init__(self, parent=None):
+        """
+        Initialisiert den CreatePatientDialog
+        
+        Args:
+            parent: Parent-Widget (für Modal-Verhalten)
+        """
+        super().__init__(parent)
+        
+        # === Dialog-Konfiguration ===
+        self.setWindowTitle("Neuen Patienten erstellen")
+        # setModal(True) macht Dialog modal (blockiert Parent)
+        self.setModal(True)
+        self.setMinimumWidth(400)
+        
+        # === Layout-Aufbau ===
+        layout = QVBoxLayout()
+        
+        # --- Vorname Input ---
+        layout.addWidget(QLabel("Vorname:"))
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("z.B. Max")
+        layout.addWidget(self.name_input)
+        
+        # --- Nachname Input ---
+        layout.addWidget(QLabel("Nachname:"))
+        self.nachname_input = QLineEdit()
+        self.nachname_input.setPlaceholderText("z.B. Mustermann")
+        layout.addWidget(self.nachname_input)
+        
+        # --- Geburtsdatum Input ---
+        layout.addWidget(QLabel("Geburtsdatum (dd.mm.yyyy):"))
+        self.date_input = QLineEdit()
+        self.date_input.setPlaceholderText("z.B. 15.03.1990")
+        layout.addWidget(self.date_input)
+        
+        # --- Dialog-Buttons ---
+        button_layout = QHBoxLayout()
+        
+        ok_btn = QPushButton("Erstellen")
+        ok_btn.clicked.connect(self.accept)
+        button_layout.addWidget(ok_btn)
+        
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        self.setLayout(layout)
+    
+    def get_patient_data(self):
+        """
+        === ITERATION 2.5: Daten-Validierung ===
+        
+        Gibt eingegebene Patientendaten zurück oder None bei Validierungsfehler.
+        
+        Validierungsschritte:
+        1. Hole Eingaben aus QLineEdit Feldern
+        2. Trim Whitespace (.strip())
+        3. Prüfe ob erforderliche Felder leer sind
+        4. Validiere Datumsformat (dd.mm.yyyy)
+        5. Gebe Dict zurück oder None
+        
+        Dependencies:
+        - QMessageBox: Für Fehlerausgaben
+        
+        Returns:
+            Dict mit {name, nachname, geburtsdatum} oder None bei Fehler
+        """
+        # Hole und bereinige Eingaben
+        name = self.name_input.text().strip()
+        nachname = self.nachname_input.text().strip()
+        geburtsdatum = self.date_input.text().strip()
+        
+        # Validierung: Vorname erforderlich
+        if not name:
+            QMessageBox.warning(self, "Fehler", "Vorname ist erforderlich!")
+            return None
+        
+        # Validierung: Nachname erforderlich
+        if not nachname:
+            QMessageBox.warning(self, "Fehler", "Nachname ist erforderlich!")
+            return None
+        
+        # Validierung: Geburtsdatum erforderlich
+        if not geburtsdatum:
+            QMessageBox.warning(self, "Fehler", "Geburtsdatum ist erforderlich!")
+            return None
+        
+        # === Datumsformat-Validierung ===
+        # Dependency: String.split()
+        # Format prüfen: dd.mm.yyyy
+        # Regeln:
+        # - Genau 3 Teile (separiert durch .)
+        # - Tag: 2 Ziffern (01-31)
+        # - Monat: 2 Ziffern (01-12)
+        # - Jahr: 4 Ziffern (1900-2100)
+        try:
+            parts = geburtsdatum.split(".")
+            # Prüfe Struktur
+            if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
+                raise ValueError("Falsches Format")
+            
+            # Prüfe Wertebereiche
+            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+            if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
+                raise ValueError("Ungültige Werte")
+                
+        except (ValueError, IndexError):
+            QMessageBox.warning(self, "Fehler", "Ungültiges Datumsformat!\nBitte verwenden Sie: dd.mm.yyyy\n\nBeispiel: 15.03.1990")
+            return None
+        
+        # Alle Validierungen bestanden → gebe Dict zurück
+        return {
+            "name": name,
+            "nachname": nachname,
+            "geburtsdatum": geburtsdatum
+        }

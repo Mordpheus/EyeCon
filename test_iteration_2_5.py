@@ -75,7 +75,7 @@ hints = QLabel("""Test-Anleitung:
    Nachname: Mustermann
    Geburtsdatum: 15.03.1990
 """)
-hints.setStyleSheet("background-color: #e8f5e9; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 9pt;")
+hints.setStyleSheet("background-color: rgb(65, 7, 7); padding: 10px; border-radius: 5px; font-family: monospace; font-size: 9pt;")
 layout.addWidget(hints)
 
 window.setLayout(layout)

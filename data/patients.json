@@ -7,7 +7,17 @@
     "ext_id": null,
     "erstellt_am": "2026-01-10T21:58:26.788136",
     "messungen": [
-      1
+      1,
+      2
     ]
+  },
+  {
+    "id": 3,
+    "name": "Anna",
+    "nachname": "Schmidt",
+    "geburtsdatum": "22.07.1985",
+    "ext_id": "SMH-2024-001",
+    "erstellt_am": "2026-01-10T23:51:46.456218",
+    "messungen": []
   }
 ]

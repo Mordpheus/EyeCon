@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
-from patient_widgets import DeleteConfirmDialog
+from patient_widgets import DeleteConfirmDialog, EditPatientDialog
 
 
 # -------------------------------------------------
@@ -12,7 +12,7 @@ from patient_widgets import DeleteConfirmDialog
 class LeftArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ich stelle sicher, dass Stylesheets den Hintergrund zeichnen
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
@@ -38,14 +38,14 @@ class LeftArea(QWidget):
 class CenterArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ich stelle sicher, dass Stylesheets den Hintergrund zeichnen
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Button-Leiste oben: Erstellen | Bearbeiten  | Löschen ---
-        # Buttons erben automatisch den globalen Stylesheet aus Main.py
+        # Ich füge oben eine Button‑Leiste ein: Erstellen | Bearbeiten | Löschen
+        # Ich lasse die Buttons den globalen Stylesheet aus Main.py erben
         button_row = QHBoxLayout()
         self.btn_create = QPushButton("Patient erstellen")
         self.btn_edit = QPushButton("Patient bearbeiten")
@@ -58,17 +58,18 @@ class CenterArea(QWidget):
 
         layout.addLayout(button_row)
 
-        # --- Platzhalter für Patientenliste (wird später mit PatientListWidget ersetzt) --
+        # Ich nutze vorerst einen Platzhalter für die Patientenliste (PatientListWidget folgt später)
         placeholder = QLabel("Patientenliste kommt hier hin")
         placeholder.setAlignment(Qt.AlignCenter)
         layout.addWidget(placeholder, 1)
 
-        # Verbindungen (Logik folgt künftig, hier nur Bestätigungsdialog anzeigen)
+        # Ich verbinde die Buttons; die Logik folgt später (hier nur Dialog-Anzeige)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
+        self.btn_edit.clicked.connect(self._on_edit_clicked)
 
     def _on_delete_clicked(self) -> None:
         """
-        Öffnet den Bestätigungs-Dialog. Die eigentliche Lösch-Logik
+        Ich öffne den Bestätigungs‑Dialog. Die eigentliche Lösch‑Logik
         (Patient aus Liste/Datenbank entfernen) folgt später.
         """
         dlg = DeleteConfirmDialog(self)
@@ -76,6 +77,26 @@ class CenterArea(QWidget):
             # Platzhalter für Löschaktion (z. B. PatientListWidget.remove_patient(...))
             # Hier noch keine Datenanbindung – nur Dialog-Verhalten prüfen.
             pass
+
+    def _on_edit_clicked(self) -> None:
+        """
+        Ich öffne den Bearbeitungsdialog für den aktuell ausgewählten Patienten.
+        Aktuell nutze ich Platzhalterdaten; die Anbindung an eine echte
+        Patientenselektion folgt in einer späteren Iteration.
+        """
+        # Ich nutze Platzhalter‑Daten (werden später durch echte Selektion ersetzt)
+        patient_data = {
+            "name": "Max",
+            "nachname": "Mustermann",
+            "geburtsdatum": "15.03.1990",
+        }
+        dlg = EditPatientDialog(self, patient_data=patient_data)
+        if dlg.exec() == dlg.Accepted:
+            updated = dlg.get_patient_data()
+            if updated:
+                # Hier könnte später ein Update im Datenmanager erfolgen
+                # (z. B. PatientDataManager.update_patient(...))
+                pass
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -91,7 +112,7 @@ class CenterArea(QWidget):
 class RightArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ich stelle sicher, dass Stylesheets den Hintergrund zeichnen
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
@@ -116,9 +137,9 @@ class RightArea(QWidget):
 # -------------------------------------------------
 class AppLayout(QWidget):
     """
-    Reines Layout-Grundgerüst:
-    Links – Mitte – Rechts
-    Keine Logik, keine Screens
+    Ich stelle das reine Layout‑Grundgerüst bereit:
+    Links – Mitte – Rechts.
+    Keine Logik, keine Screens.
     """
 
     def __init__(self):

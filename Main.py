@@ -1,7 +1,7 @@
 ﻿"""
-EyeCon - Hauptanwendungsdatei
+EyeCon – Hauptanwendungsdatei
 
-Diese Datei startet die Anwendung mit einem einfachen leeren Hauptfenster.
+Ich starte die Anwendung mit einem einfachen leeren Hauptfenster.
 """
 
 import sys
@@ -13,7 +13,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # === Globales StyleSheet für alle QPushButtons ===
-    # Einheitliches Design für alle Buttons im gesamten Projekt
+    # Ich wende einheitliches Design für alle Buttons im gesamten Projekt an
     btn_style = """
     QPushButton {
         background-color: #e7ecf8;

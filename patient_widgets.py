@@ -18,14 +18,14 @@ from typing import Dict, Any, Optional
 
 class PatientButton(QPushButton):
     """
-    Iteration 2.1: PatientButton - Grundstruktur
-    Iteration 2.2: PatientButton - Styling & Layout
-    Iteration 2.3: PatientButton - Signals & Click-Interaktion
+    Iteration 2.1: PatientButton – Grundstruktur
+    Iteration 2.2: PatientButton – Styling & Layout
+    Iteration 2.3: PatientButton – Signals & Click-Interaktion
     
     Anklickbarer Button mit Patientendaten.
     Zeigt Name, Nachname, Geburtsdatum und IDs an.
     Mit Styling: Grün wenn selektiert, Grau sonst.
-    Emittiert Signal bei Klick für externe Verarbeitung.
+    Sendet Signal bei Klick für externe Verarbeitung.
     """
     
     # === ITERATION 2.3: Custom Signal Definition ===
@@ -175,7 +175,7 @@ class PatientButton(QPushButton):
 
 class PatientListWidget(QWidget):
     """
-    Iteration 2.4: PatientListWidget - Container für Patient-Buttons
+    Iteration 2.4: PatientListWidget – Container für Patient-Buttons
     
     Verwaltet eine scrollbare Liste von PatientButtons.
     Funktionen:
@@ -360,13 +360,13 @@ class PatientListWidget(QWidget):
 
 class CreatePatientDialog(QDialog):
     """
-    Iteration 2.5: CreatePatientDialog - Modal Dialog zur Patient-Ersstellung
+    Iteration 2.5: CreatePatientDialog – Modal Dialog zur Patient-Erstellung
     
     Funktionen:
-    - Modal Dialog (blockiert Hauptfenster bis geschlossen)
+    - Ich bin ein Modal Dialog (blockiere Hauptfenster bis geschlossen)
     - 3 Input-Felder: Vorname, Nachname, Geburtsdatum (dd.mm.yyyy)
-    - Validierung: Datumsformat und erforderliche Felder
-    - Gibt Dict mit Patientendaten oder None zurück
+    - Ich validiere Datumsformat und erforderliche Felder
+    - Ich gebe Dict mit Patientendaten oder None zurück
     
     Usage:
         dialog = CreatePatientDialog(parent_widget)
@@ -499,8 +499,8 @@ class CreatePatientDialog(QDialog):
 
 class EditPatientDialog(QDialog):
     """
-    Iteration 3_1: EditPatientDialog - Dialog zur Patient-Bearbeitung
-    Wie patient dialog aber muss bestehende daten anzeigen und die gleichen fehlermeldungen wie CreatePatientDialog haben
+    Iteration 3.1: EditPatientDialog – Dialog zur Patient-Bearbeitung
+    Ich funktioniere wie CreatePatientDialog, aber ich zeige bestehende Daten an und verwende dieselben Fehlermeldungen
     """
     def __init__(self, parent=None, patient_data = None):
         super().__init__(parent)
@@ -580,9 +580,9 @@ class EditPatientDialog(QDialog):
 
 class DeleteConfirmDialog(QDialog):
     """
-    Iteration 3.3: Bestätigungs-Dialog zum Löschen eines Patienten
+    Iteration 3.3: DeleteConfirmDialog – Bestätigungs-Dialog zum Löschen eines Patienten
     
-    Einfache Ja/Nein-Abfrage mit klarer Formulierung.
+    Ich stelle eine einfache Ja/Nein-Abfrage mit klarer Formulierung bereit.
     Dependencies:
     - QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout
     """
@@ -594,7 +594,7 @@ class DeleteConfirmDialog(QDialog):
 
         layout = QVBoxLayout()
 
-        # Frage-Text: optional mit Patientenname
+        # Frage-Text: optional mit Patientennamen?
         text = "Patienten wirklich löschen?"
         if patient_name:
             text = f"Patient '{patient_name}' wirklich löschen?"
@@ -614,5 +614,5 @@ class DeleteConfirmDialog(QDialog):
         self.setLayout(layout)
 
     def ask(self) -> bool:
-        """Öffnet den Dialog modally und gibt True bei 'Ja', sonst False zurück."""
+        """Ich öffne den Dialog modal und gebe True bei 'Ja', sonst False zurück."""
         return self.exec() == QDialog.Accepted

@@ -3,6 +3,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
+from patient_widgets import DeleteConfirmDialog
 
 
 # -------------------------------------------------
@@ -61,6 +62,20 @@ class CenterArea(QWidget):
         placeholder = QLabel("Patientenliste kommt hier hin")
         placeholder.setAlignment(Qt.AlignCenter)
         layout.addWidget(placeholder, 1)
+
+        # Verbindungen (Logik folgt künftig, hier nur Bestätigungsdialog anzeigen)
+        self.btn_delete.clicked.connect(self._on_delete_clicked)
+
+    def _on_delete_clicked(self) -> None:
+        """
+        Öffnet den Bestätigungs-Dialog. Die eigentliche Lösch-Logik
+        (Patient aus Liste/Datenbank entfernen) folgt später.
+        """
+        dlg = DeleteConfirmDialog(self)
+        if dlg.ask():
+            # Platzhalter für Löschaktion (z. B. PatientListWidget.remove_patient(...))
+            # Hier noch keine Datenanbindung – nur Dialog-Verhalten prüfen.
+            pass
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

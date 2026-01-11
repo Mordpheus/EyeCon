@@ -576,3 +576,43 @@ class EditPatientDialog(QDialog):
             "nachname": nachname,
             "geburtsdatum": geburtsdatum
         } 
+
+
+class DeleteConfirmDialog(QDialog):
+    """
+    Iteration 3.3: Bestätigungs-Dialog zum Löschen eines Patienten
+    
+    Einfache Ja/Nein-Abfrage mit klarer Formulierung.
+    Dependencies:
+    - QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout
+    """
+    def __init__(self, parent=None, patient_name: str | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Löschen bestätigen")
+        self.setModal(True)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout()
+
+        # Frage-Text: optional mit Patientenname
+        text = "Patienten wirklich löschen?"
+        if patient_name:
+            text = f"Patient '{patient_name}' wirklich löschen?"
+        label = QLabel(text)
+        layout.addWidget(label)
+
+        # Buttons: Ja / Nein
+        btn_row = QHBoxLayout()
+        yes_btn = QPushButton("Ja")
+        no_btn = QPushButton("Nein")
+        yes_btn.clicked.connect(self.accept)
+        no_btn.clicked.connect(self.reject)
+        btn_row.addWidget(yes_btn)
+        btn_row.addWidget(no_btn)
+        layout.addLayout(btn_row)
+
+        self.setLayout(layout)
+
+    def ask(self) -> bool:
+        """Öffnet den Dialog modally und gibt True bei 'Ja', sonst False zurück."""
+        return self.exec() == QDialog.Accepted

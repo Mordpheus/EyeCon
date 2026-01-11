@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
@@ -43,9 +43,23 @@ class CenterArea(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        label = QLabel("CENTER AREA")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
+        # --- Button-Leiste oben: Erstellen | Bearbeiten  | Löschen ---
+        button_row = QHBoxLayout()
+        self.btn_create = QPushButton("Patient erstellen")
+        self.btn_edit = QPushButton("Patient bearbeiten")
+        self.btn_delete = QPushButton("Patient löschen")
+
+        button_row.addWidget(self.btn_create)
+        button_row.addWidget(self.btn_edit)
+        button_row.addWidget(self.btn_delete)
+        button_row.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
+
+        layout.addLayout(button_row)
+
+        # --- Platzhalter für Patientenliste (wird später mit PatientListWidget ersetzt) --
+        placeholder = QLabel("Patientenliste kommt hier hin")
+        placeholder.setAlignment(Qt.AlignCenter)
+        layout.addWidget(placeholder, 1)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

@@ -495,3 +495,84 @@ class CreatePatientDialog(QDialog):
             "nachname": nachname,
             "geburtsdatum": geburtsdatum
         }
+
+
+class EditPatientDialog(QDialog):
+    """
+    Iteration 3_1: EditPatientDialog - Dialog zur Patient-Bearbeitung
+    Wie patient dialog aber muss bestehende daten anzeigen und die gleichen fehlermeldungen wie CreatePatientDialog haben
+    """
+    def __init__(self, parent=None, patient_data = None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Patienten bearbeiten")
+        self.setModal(True)
+        self.setMinimumWidth(400)
+
+        layout = QVBoxLayout()
+
+        layout.addWidget(QLabel("Vorname:"))
+        self.name_input = QLineEdit()
+        self.name_input.setText(patient_data.get("name", "") if patient_data else "")
+        layout.addWidget(self.name_input)
+
+        
+        layout.addWidget(QLabel("Nachname:"))
+        self.nachname_input = QLineEdit()
+        self.nachname_input.setText(patient_data.get("nachname", "") if patient_data else "")
+        layout.addWidget(self.nachname_input)
+        
+        layout.addWidget(QLabel("Geburtsdatum(dd.mm.jjjj):"))
+        self.date_input = QLineEdit()
+        self.date_input.setText(patient_data.get("geburtsdatum", "") if patient_data else "")
+        layout.addWidget(self.date_input)
+
+        button_layout = QHBoxLayout()
+
+        save_btn = QPushButton("Speichern")
+        save_btn.clicked.connect(self.accept)
+        button_layout.addWidget(save_btn)
+
+        cancel_btn= QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def get_patient_data(self):
+        """Validiert und gibt aktualisierte Patientendaten zurück (wie CreatePatientDialog)"""
+        name = self.name_input.text().strip()
+        nachname = self.nachname_input.text().strip()
+        geburtsdatum = self.date_input.text().strip()
+
+        if not name:
+            QMessageBox.warning(self, "Fehler", "Vorname ist erforderlich!")
+            return None
+
+        if not nachname:
+            QMessageBox.warning(self, "Fehler", "Nachname ist erforderlich!")
+            return None
+
+        if not geburtsdatum:
+            QMessageBox.warning(self, "Fehler", "Geburtsdatum ist erforderlich!")
+            return None
+
+        try:
+            parts = geburtsdatum.split(".")
+            if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
+                raise ValueError("Falsches Format")
+
+            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+            if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
+                raise ValueError("Ungültige Werte")
+
+        except (ValueError, IndexError):
+            QMessageBox.warning(self, "Fehler", "Ungültiges Datumsformat!\nBitte verwenden Sie: dd.mm.yyyy\n\nBeispiel: 15.03.1990")
+            return None
+
+        return {
+            "name": name,
+            "nachname": nachname,
+            "geburtsdatum": geburtsdatum
+        } 

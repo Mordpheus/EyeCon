@@ -360,13 +360,13 @@ class PatientListWidget(QWidget):
 
 class CreatePatientDialog(QDialog):
     """
-    Iteration 2.5: CreatePatientDialog – Modal Dialog zur Patient-Erstellung
+    Iteration 2.5: CreatePatientDialog - Modal Dialog zur Patient-Ersstellung
     
     Funktionen:
-    - Ich bin ein Modal Dialog (blockiere Hauptfenster bis geschlossen)
+    - Modal Dialog (blockiert Hauptfenster bis geschlossen)
     - 3 Input-Felder: Vorname, Nachname, Geburtsdatum (dd.mm.yyyy)
-    - Ich validiere Datumsformat und erforderliche Felder
-    - Ich gebe Dict mit Patientendaten oder None zurück
+    - Validierung: Datumsformat und erforderliche Felder
+    - Gibt Dict mit Patientendaten oder None zurück
     
     Usage:
         dialog = CreatePatientDialog(parent_widget)
@@ -499,8 +499,8 @@ class CreatePatientDialog(QDialog):
 
 class EditPatientDialog(QDialog):
     """
-    Iteration 3.1: EditPatientDialog – Dialog zur Patient-Bearbeitung
-    Ich funktioniere wie CreatePatientDialog, aber ich zeige bestehende Daten an und verwende dieselben Fehlermeldungen
+    Iteration 3_1: EditPatientDialog - Dialog zur Patient-Bearbeitung
+    Wie patient dialog aber muss bestehende daten anzeigen und die gleichen fehlermeldungen wie CreatePatientDialog haben
     """
     def __init__(self, parent=None, patient_data = None):
         super().__init__(parent)
@@ -582,7 +582,7 @@ class DeleteConfirmDialog(QDialog):
     """
     Iteration 3.3: DeleteConfirmDialog – Bestätigungs-Dialog zum Löschen eines Patienten
     
-    Ich stelle eine einfache Ja/Nein-Abfrage mit klarer Formulierung bereit.
+    Einfache Ja/Nein-Abfrage mit klarer Formulierung.
     Dependencies:
     - QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout
     """
@@ -614,5 +614,5 @@ class DeleteConfirmDialog(QDialog):
         self.setLayout(layout)
 
     def ask(self) -> bool:
-        """Ich öffne den Dialog modal und gebe True bei 'Ja', sonst False zurück."""
+        """Öffnet den Dialog modally und gibt True bei 'Ja', sonst False zurück."""
         return self.exec() == QDialog.Accepted

@@ -49,6 +49,25 @@ class CenterArea(QWidget):
         self.btn_edit = QPushButton("Patient bearbeiten")
         self.btn_delete = QPushButton("Patient löschen")
 
+        # Einheitliches Button-Styling mit klar erkennbarem Hover-Effekt
+        btn_style = (
+            "QPushButton {"
+            " background-color: #e7ecf8;"
+            " color: #1f2d4d;"
+            " border: 1px solid #c4d1f2;"
+            " border-radius: 6px;"
+            " padding: 8px 12px;"
+            " }"
+            " QPushButton:hover {"
+            " background-color: #d2ddf6;"
+            " }"
+            " QPushButton:pressed {"
+            " background-color: #c0cff1;"
+            " }"
+        )
+        for btn in (self.btn_create, self.btn_edit, self.btn_delete):
+            btn.setStyleSheet(btn_style)
+
         button_row.addWidget(self.btn_create)
         button_row.addWidget(self.btn_edit)
         button_row.addWidget(self.btn_delete)

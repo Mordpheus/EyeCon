@@ -9,7 +9,7 @@ from data_manager import PatientDataManager
 
 
 # -------------------------------------------------
-# LEFT AREA - Sidebar placeholder
+# LEFT AREA - Navigation Sidebar with Icons
 # -------------------------------------------------
 class LeftArea(QWidget):
     def __init__(self):
@@ -18,13 +18,110 @@ class LeftArea(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(20)
 
-        label = QLabel("LEFT AREA")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
+        # === Navigation Buttons ===
+        # 1. Patients Button
+        patients_layout = QHBoxLayout()
+        patients_icon = QLabel("👥")  # People icon
+        patients_icon.setStyleSheet("font-size: 28px;")
+        patients_btn = QPushButton("Patients")
+        patients_btn.setMinimumHeight(45)
+        patients_layout.addWidget(patients_icon)
+        patients_layout.addWidget(patients_btn, 1)
+        patients_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(patients_layout)
+
+        # 2. Import Data Button
+        import_layout = QHBoxLayout()
+        import_icon = QLabel("📥")  # Import icon
+        import_icon.setStyleSheet("font-size: 28px;")
+        import_btn = QPushButton("Import Data")
+        import_btn.setMinimumHeight(45)
+        import_layout.addWidget(import_icon)
+        import_layout.addWidget(import_btn, 1)
+        import_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(import_layout)
+
+        # 3. Settings Button
+        settings_layout = QHBoxLayout()
+        settings_icon = QLabel("⚙️")  # Settings icon
+        settings_icon.setStyleSheet("font-size: 28px;")
+        settings_btn = QPushButton("Settings")
+        settings_btn.setMinimumHeight(45)
+        settings_layout.addWidget(settings_icon)
+        settings_layout.addWidget(settings_btn, 1)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(settings_layout)
+
+        # 4. Help Button
+        help_layout = QHBoxLayout()
+        help_icon = QLabel("❓")  # Help icon
+        help_icon.setStyleSheet("font-size: 28px;")
+        help_btn = QPushButton("Help")
+        help_btn.setMinimumHeight(45)
+        help_layout.addWidget(help_icon)
+        help_layout.addWidget(help_btn, 1)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addLayout(help_layout)
+
+        # === Patient Info (wird sichtbar wenn Patient ausgewählt) ===
+        layout.addSpacing(30)
+
+        # Patient Name Display (non-clickable)
+        self.patient_name_display = QPushButton()
+        self.patient_name_display.setText("No patient selected")
+        self.patient_name_display.setEnabled(False)
+        self.patient_name_display.setMinimumHeight(50)
+        self.patient_name_display.setStyleSheet(
+            "QPushButton { "
+            "background-color: #e7ecf8; "
+            "color: #333333; "
+            "border: 1px solid #cccccc; "
+            "border-radius: 4px; "
+            "padding: 8px; "
+            "font-weight: bold; "
+            "text-align: left; "
+            "}"
+        )
+        layout.addWidget(self.patient_name_display)
+
+        # Recordings Dropdown
+        self.recordings_label = QLabel("Recordings:")
+        self.recordings_label.setStyleSheet("color: white; font-weight: bold;")
+        layout.addWidget(self.recordings_label)
+
+        # Dummy for now - will be replaced with QComboBox
+        self.recordings_dropdown = QLabel("(No recordings)")
+        self.recordings_dropdown.setStyleSheet("color: #cccccc;")
+        layout.addWidget(self.recordings_dropdown)
+
+        # Spacer to push everything to top
+        layout.addStretch()
 
         self.setFixedWidth(220)
+
+        # Store button references for signal connections
+        self.btn_patients = patients_btn
+        self.btn_import = import_btn
+        self.btn_settings = settings_btn
+        self.btn_help = help_btn
+
+    def set_selected_patient(self, patient_name: str) -> None:
+        """Update patient name display in sidebar."""
+        self.patient_name_display.setText(patient_name)
+        self.patient_name_display.setStyleSheet(
+            "QPushButton { "
+            "background-color: #d0dff0; "
+            "color: #1a1a1a; "
+            "border: 2px solid #5f8fdc; "
+            "border-radius: 4px; "
+            "padding: 8px; "
+            "font-weight: bold; "
+            "text-align: left; "
+            "}"
+        )
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

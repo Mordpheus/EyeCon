@@ -25,7 +25,9 @@ class LeftArea(QWidget):
         upper_container = QWidget()
         upper_layout = QVBoxLayout(upper_container)
         upper_layout.setContentsMargins(0, 0, 0, 0)
-        upper_layout.setSpacing(40)  # Large spacing between buttons
+        upper_layout.setSpacing(0)  # No fixed spacing - use stretch for dynamic sizing
+
+        upper_layout.addStretch(1)  # Initial space at top
 
         # 1. Patients Button
         patients_layout = QHBoxLayout()
@@ -38,6 +40,8 @@ class LeftArea(QWidget):
         patients_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(patients_layout)
 
+        upper_layout.addStretch(2)  # DYNAMIC SPACING: Scales with window height
+
         # 2. Import Data Button
         import_layout = QHBoxLayout()
         import_icon = QLabel("📥")
@@ -48,6 +52,8 @@ class LeftArea(QWidget):
         import_layout.addWidget(import_btn, 1)
         import_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(import_layout)
+
+        upper_layout.addStretch(2)  # DYNAMIC SPACING: Scales with window height
 
         # 3. Settings Button
         settings_layout = QHBoxLayout()
@@ -60,6 +66,8 @@ class LeftArea(QWidget):
         settings_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(settings_layout)
 
+        upper_layout.addStretch(2)  # DYNAMIC SPACING: Scales with window height
+
         # 4. Help Button
         help_layout = QHBoxLayout()
         help_icon = QLabel("❓")
@@ -71,7 +79,7 @@ class LeftArea(QWidget):
         help_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(help_layout)
 
-        upper_layout.addStretch()  # Fill rest of upper half
+        upper_layout.addStretch(1)  # Final space at bottom
         main_layout.addWidget(upper_container, 1)  # UPPER HALF: 50% of sidebar height
 
         # === LOWER HALF (50% height): Patient Info ===

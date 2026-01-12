@@ -447,22 +447,22 @@ class CreatePatientDialog(QDialog):
             Dict with {first_name, last_name, birthdate} or None on error
         """
         # # Get and clean input
-        name = self.name_input.text().strip()
-        nachname = self.nachname_input.text().strip()
-        geburtsdatum = self.date_input.text().strip()
+        first_name = self.name_input.text().strip()
+        last_name = self.nachname_input.text().strip()
+        birthdate = self.date_input.text().strip()
         
         # # Validation: First name required
-        if not name:
+        if not first_name:
             QMessageBox.warning(self, "Error", "First name is required!")
             return None
         
-        # Validierung: Nachname erforderlich
-        if not nachname:
+        # Validation: Last name required
+        if not last_name:
             QMessageBox.warning(self, "Error", "Last name is required!")
             return None
         
-        # Validierung: Geburtsdatum erforderlich
-        if not geburtsdatum:
+        # Validation: Birthdate required
+        if not birthdate:
             QMessageBox.warning(self, "Error", "Birthdate is required!")
             return None
         
@@ -475,7 +475,7 @@ class CreatePatientDialog(QDialog):
         # - # Month: 2 digits (01-12)
         # - # Year: 4 digits (1900-2100)
         try:
-            parts = geburtsdatum.split(".")
+            parts = birthdate.split(".")
             # # Check structure
             if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
                 raise ValueError("# Wrong format")
@@ -542,24 +542,24 @@ class EditPatientDialog(QDialog):
 
     def get_patient_data(self):
         """# Validate and return updated patient data (wie CreatePatientDialog)"""
-        name = self.name_input.text().strip()
-        nachname = self.nachname_input.text().strip()
-        geburtsdatum = self.date_input.text().strip()
+        first_name = self.name_input.text().strip()
+        last_name = self.nachname_input.text().strip()
+        birthdate = self.date_input.text().strip()
 
-        if not name:
+        if not first_name:
             QMessageBox.warning(self, "Error", "First name is required!")
             return None
 
-        if not nachname:
+        if not last_name:
             QMessageBox.warning(self, "Error", "Last name is required!")
             return None
 
-        if not geburtsdatum:
+        if not birthdate:
             QMessageBox.warning(self, "Error", "Birthdate is required!")
             return None
 
         try:
-            parts = geburtsdatum.split(".")
+            parts = birthdate.split(".")
             if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
                 raise ValueError("# Wrong format")
 

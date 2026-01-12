@@ -1,7 +1,7 @@
 ﻿"""
-EyeCon - Hauptanwendungsdatei
+EyeCon - Main application file
 
-Diese Datei startet die Anwendung mit einem einfachen leeren Hauptfenster.
+Starts the application with a main window and layout.
 """
 
 import sys
@@ -12,8 +12,8 @@ from app_layout import AppLayout
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # === Globales StyleSheet für alle QPushButtons ===
-    # Einheitliches Design für alle Buttons im gesamten Projekt
+    # === Global stylesheet for all QPushButtons ===
+    # Unified design for all buttons throughout the project
     btn_style = """
     QPushButton {
         background-color: #e7ecf8;
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     """
     app.setStyleSheet(btn_style)
 
-    # === Hauptfenster erstellen ===
+    # === Create main window ===
     win = QMainWindow()
     win.setWindowTitle("Layout Prototype")
     win.resize(1200, 800)

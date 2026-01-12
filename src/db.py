@@ -9,9 +9,9 @@ SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS patient (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT,
-    name TEXT NOT NULL,
-    nachname TEXT NOT NULL,
-    geburtsdatum TEXT,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    birthdate TEXT,
     created_at TEXT DEFAULT (datetime('now'))
 );
 
@@ -39,40 +39,40 @@ class PatientDataManager:
         return conn
 
     def init(self) -> None:
-        # Datenbank initialisieren und Tabellen erstellen
+        # Initialize database and create schema tables
         with self.connect() as conn:
             conn.executescript(SCHEMA_SQL)
             conn.commit()
 
     def create_patient(
         self,
-        name: str,
-        nachname: str,
-        geburtsdatum: Optional[str] = None,
+        first_name: str,
+        last_name: str,
+        birthdate: Optional[str] = None,
         external_id: Optional[str] = None
     ) -> int:
-        # Neuen Patienten anlegen und ID zurückgeben
+        # Create new patient and return ID
         with self.connect() as conn:
             cur = conn.execute(
-                "INSERT INTO patient (name, nachname, geburtsdatum, external_id) VALUES (?, ?, ?, ?)",
-                (name, nachname, geburtsdatum, external_id)
+                "INSERT INTO patient (first_name, last_name, birthdate, external_id) VALUES (?, ?, ?, ?)",
+                (first_name, last_name, birthdate, external_id)
             )
             conn.commit()
             return cur.lastrowid
 
     def get_all_patients(self) -> list[dict]:
-        # Alle Patienten auflisten, sortiert nach Nachname, dann Name
+        # Fetch all patients, sorted by last name then first name
         with self.connect() as conn:
             cur = conn.execute(
-                "SELECT id, name, nachname, geburtsdatum, external_id, created_at FROM patient ORDER BY nachname, name"
+                "SELECT id, first_name, last_name, birthdate, external_id, created_at FROM patient ORDER BY last_name, first_name"
             )
             return [dict(row) for row in cur.fetchall()]
 
     def get_patient(self, patient_id: int) -> dict | None:
-        # Einzelnen Patienten auslesen
+        # Fetch single patient by ID
         with self.connect() as conn:
             cur = conn.execute(
-                "SELECT id, name, nachname, geburtsdatum, external_id, created_at FROM patient WHERE id = ?",
+                "SELECT id, first_name, last_name, birthdate, external_id, created_at FROM patient WHERE id = ?",
                 (patient_id,)
             )
             row = cur.fetchone()
@@ -81,25 +81,25 @@ class PatientDataManager:
     def update_patient(
         self,
         patient_id: int,
-        name: Optional[str] = None,
-        nachname: Optional[str] = None,
-        geburtsdatum: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        birthdate: Optional[str] = None,
         external_id: Optional[str] = None
     ) -> bool:
-        # Patientendaten aktualisieren
+        # Update patient data
         with self.connect() as conn:
             updates = []
             values = []
 
-            if name is not None:
-                updates.append("name = ?")
-                values.append(name)
-            if nachname is not None:
-                updates.append("nachname = ?")
-                values.append(nachname)
-            if geburtsdatum is not None:
-                updates.append("geburtsdatum = ?")
-                values.append(geburtsdatum)
+            if first_name is not None:
+                updates.append("first_name = ?")
+                values.append(first_name)
+            if last_name is not None:
+                updates.append("last_name = ?")
+                values.append(last_name)
+            if birthdate is not None:
+                updates.append("birthdate = ?")
+                values.append(birthdate)
             if external_id is not None:
                 updates.append("external_id = ?")
                 values.append(external_id)
@@ -114,7 +114,7 @@ class PatientDataManager:
             return cur.rowcount > 0
 
     def delete_patient(self, patient_id: int) -> bool:
-        # Patient und seine Messungen löschen
+        # Delete patient and associated measurements
         with self.connect() as conn:
             conn.execute("DELETE FROM measurement WHERE patient_id = ?", (patient_id,))
             cur = conn.execute("DELETE FROM patient WHERE id = ?", (patient_id,))
@@ -127,7 +127,7 @@ class PatientDataManager:
         data: str,
         is_baseline: bool = False
     ) -> int:
-        # Neue Messung hinzufügen
+        # Add new measurement for patient
         with self.connect() as conn:
             cur = conn.execute(
                 "INSERT INTO measurement (patient_id, data, is_baseline) VALUES (?, ?, ?)",
@@ -137,7 +137,7 @@ class PatientDataManager:
             return cur.lastrowid
 
     def get_measurements(self, patient_id: int) -> list[dict]:
-        # Alle Messungen eines Patienten auslesen
+        # Fetch all measurements for patient, newest first
         with self.connect() as conn:
             cur = conn.execute(
                 "SELECT id, patient_id, recorded_at, is_baseline, data FROM measurement WHERE patient_id = ? ORDER BY recorded_at DESC",
@@ -146,7 +146,7 @@ class PatientDataManager:
             return [dict(row) for row in cur.fetchall()]
 
     def get_baseline_measurement(self, patient_id: int) -> dict | None:
-        # Neueste Baseline-Messung eines Patienten
+        # Fetch most recent baseline measurement for patient
         with self.connect() as conn:
             cur = conn.execute(
                 "SELECT id, patient_id, recorded_at, is_baseline, data FROM measurement WHERE patient_id = ? AND is_baseline = 1 ORDER BY recorded_at DESC LIMIT 1",

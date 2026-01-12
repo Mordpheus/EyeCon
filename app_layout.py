@@ -8,12 +8,12 @@ from data_manager import PatientDataManager
 
 
 # -------------------------------------------------
-# LINKER BEREICH – Platzhalter (Sidebar)
+# LEFT AREA - Sidebar placeholder
 # -------------------------------------------------
 class LeftArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ensure stylesheets render background
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
@@ -34,27 +34,27 @@ class LeftArea(QWidget):
 
 
 # -------------------------------------------------
-# MITTLERER BEREICH – Hauptinhalt
+# CENTER AREA - Main content
 # -------------------------------------------------
 class CenterArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ensure stylesheets render background
         self.setAttribute(Qt.WA_StyledBackground, True)
 
-        # Datenmanager und Auswahlzustand
+        # Data manager and selection state
         self.manager = PatientDataManager()
         self.selected_patient_id = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Button-Leiste oben: Erstellen | Bearbeiten  | Löschen ---
-        # Buttons erben automatisch den globalen Stylesheet aus Main.py
+        # --- Button bar: Create | Edit | Delete ---
+        # Buttons inherit global stylesheet from Main.py
         button_row = QHBoxLayout()
-        self.btn_create = QPushButton("Patient erstellen")
-        self.btn_edit = QPushButton("Patient bearbeiten")
-        self.btn_delete = QPushButton("Patient löschen")
+        self.btn_create = QPushButton("Create patient")
+        self.btn_edit = QPushButton("Edit patient")
+        self.btn_delete = QPushButton("Delete patient")
 
         button_row.addWidget(self.btn_create)
         button_row.addWidget(self.btn_edit)
@@ -63,61 +63,62 @@ class CenterArea(QWidget):
 
         layout.addLayout(button_row)
 
-        # --- Patientenliste ---
+        # --- Patient list ---
         self.patient_list = PatientListWidget()
         layout.addWidget(self.patient_list, 1)
 
-        # Patienten laden und anzeigen
+        # Load and display patients
         for p in self.manager.get_all_patients():
             self.patient_list.add_patient(p)
 
-        # Auswahl-Callback verbinden
+        # Connect selection callback
         self.patient_list.patient_selected.connect(self._on_patient_selected)
 
-        # Button-Callbacks
+        # Connect button callbacks
         self.btn_create.clicked.connect(self._on_create_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.btn_edit.clicked.connect(self._on_edit_clicked)
 
     def _on_patient_selected(self, patient_id: int) -> None:
-        """Speichert die aktuell ausgewählte Patient-ID."""
+        # Store currently selected patient ID
         self.selected_patient_id = patient_id
 
     def _on_create_clicked(self) -> None:
-        """Create-Dialog öffnen und neuen Patienten speichern + anzeigen."""
+        # Open create dialog and save new patient
         dlg = CreatePatientDialog(self)
         if dlg.exec() == dlg.Accepted:
             data = dlg.get_patient_data()
             if data:
-                created = self.manager.create_patient(
-                    name=data["nachname"],
-                    nachname=data["name"],
-                    geburtsdatum=data["geburtsdatum"]
+                patient_id = self.manager.create_patient(
+                    first_name=data["first_name"],
+                    last_name=data["last_name"],
+                    birthdate=data["birthdate"]
                 )
-                self.patient_list.add_patient(created)
+                patient = self.manager.get_patient(patient_id)
+                if patient:
+                    self.patient_list.add_patient(patient)
 
     def _on_delete_clicked(self) -> None:
-        """Bestätigungs-Dialog öffnen und bei Zustimmung löschen."""
+        # Open confirmation dialog and delete on approval
         if self.selected_patient_id is None:
-            QMessageBox.information(self, "Hinweis", "Kein Patient ausgewählt.")
+            QMessageBox.information(self, "Info", "No patient selected.")
             return
-        # Optional: Namen anzeigen
         patient = self.manager.get_patient(self.selected_patient_id)
         dlg = DeleteConfirmDialog(self)
         if dlg.ask():
-            # Löschen in Datenmanager und aus Liste entfernen
+            # Delete from data manager and remove from list
             self.manager.delete_patient(self.selected_patient_id)
             self.patient_list.remove_patient(self.selected_patient_id)
             self.selected_patient_id = None
 
     def _on_edit_clicked(self) -> None:
-        """Bearbeiten-Dialog öffnen, Änderungen speichern und Liste aktualisieren."""
+        # Open edit dialog, save changes and refresh list
         if self.selected_patient_id is None:
-            QMessageBox.information(self, "Hinweis", "Kein Patient ausgewählt.")
+            QMessageBox.information(self, "Info", "No patient selected.")
             return
         patient = self.manager.get_patient(self.selected_patient_id)
         if not patient:
-            QMessageBox.warning(self, "Fehler", "Patient nicht gefunden.")
+            QMessageBox.warning(self, "Error", "Patient not found.")
             return
         dlg = EditPatientDialog(self, patient_data=patient)
         if dlg.exec() == dlg.Accepted:
@@ -125,15 +126,15 @@ class CenterArea(QWidget):
             if updated:
                 self.manager.update_patient(
                     self.selected_patient_id,
-                    name=updated["name"],
-                    nachname=updated["nachname"],
+                    first_name=updated["first_name"],
+                    last_name=updated["last_name"],
                 )
-                # Button neu erzeugen (einfacher Refresh):
+                # Recreate button (simple refresh)
                 self.patient_list.remove_patient(self.selected_patient_id)
                 refreshed = self.manager.get_patient(self.selected_patient_id)
                 if refreshed:
                     self.patient_list.add_patient(refreshed)
-                    # Auswahl wiederherstellen
+                    # Restore selection
                     self.patient_list.select_patient(self.selected_patient_id)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -145,12 +146,12 @@ class CenterArea(QWidget):
 
 
 # -------------------------------------------------
-# RECHTER BEREICH – Analyse / Info
+# RIGHT AREA - Analysis / Info
 # -------------------------------------------------
 class RightArea(QWidget):
     def __init__(self):
         super().__init__()
-        # Sicherstellen, dass Stylesheets den Hintergrund zeichnen
+        # Ensure stylesheets render background
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
@@ -171,14 +172,11 @@ class RightArea(QWidget):
 
 
 # -------------------------------------------------
-# GESAMTES GRUNDGERÜST
+# OVERALL FRAMEWORK
 # -------------------------------------------------
 class AppLayout(QWidget):
-    """
-    Reines Layout-Grundgerüst:
-    Links – Mitte – Rechts
-    Keine Logik, keine Screens
-    """
+    # Pure layout framework: Left - Center - Right
+    # No logic, no screens
 
     def __init__(self):
         super().__init__()
@@ -192,5 +190,5 @@ class AppLayout(QWidget):
         self.right = RightArea()
 
         layout.addWidget(self.left)
-        layout.addWidget(self.center, 1)  # flexibel
+        layout.addWidget(self.center, 1)  # flexible
         layout.addWidget(self.right)

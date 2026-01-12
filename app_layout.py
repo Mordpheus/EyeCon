@@ -1,3 +1,4 @@
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox
 )
@@ -43,7 +44,7 @@ class CenterArea(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         # Data manager and selection state
-        self.manager = PatientDataManager()
+        self.manager = PatientDataManager(Path("data/eyecon.db"))
         self.selected_patient_id = None
 
         layout = QVBoxLayout(self)

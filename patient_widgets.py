@@ -56,7 +56,7 @@ class PatientButton(QPushButton):
         
         ext_id_text = ""
         if patient_data.get("external_id"):
-            ext_id_text = f"Ext-ID: {patient_data['ext_id']}\n"
+            ext_id_text = f"Ext-ID: {patient_data['external_id']}\n"
         
         text = f"{name_display}\nBorn: {geb}\n{ext_id_text}{app_id}"
         

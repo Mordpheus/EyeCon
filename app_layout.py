@@ -1,6 +1,6 @@
 from pathlib import Path
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
@@ -87,7 +87,7 @@ class CenterArea(QWidget):
     def _on_create_clicked(self) -> None:
         # Open create dialog and save new patient
         dlg = CreatePatientDialog(self)
-        if dlg.exec() == dlg.Accepted:
+        if dlg.exec() == QDialog.Accepted:
             data = dlg.get_patient_data()
             if data:
                 patient_id = self.manager.create_patient(
@@ -122,7 +122,7 @@ class CenterArea(QWidget):
             QMessageBox.warning(self, "Error", "Patient not found.")
             return
         dlg = EditPatientDialog(self, patient_data=patient)
-        if dlg.exec() == dlg.Accepted:
+        if dlg.exec() == QDialog.Accepted:
             updated = dlg.get_patient_data()
             if updated:
                 self.manager.update_patient(

@@ -17,88 +17,101 @@ class LeftArea(QWidget):
         # Ensure stylesheets render background
         self.setAttribute(Qt.WA_StyledBackground, True)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(20)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(15, 15, 15, 15)
+        main_layout.setSpacing(0)
 
-        # === Navigation Buttons ===
+        # === UPPER HALF (50% height): Navigation Buttons ===
+        upper_container = QWidget()
+        upper_layout = QVBoxLayout(upper_container)
+        upper_layout.setContentsMargins(0, 0, 0, 0)
+        upper_layout.setSpacing(40)  # Large spacing between buttons
+
         # 1. Patients Button
         patients_layout = QHBoxLayout()
-        patients_icon = QLabel("👥")  # People icon
+        patients_icon = QLabel("👥")
         patients_icon.setStyleSheet("font-size: 28px;")
         patients_btn = QPushButton("Patients")
-        patients_btn.setMinimumHeight(45)
+        patients_btn.setMinimumHeight(50)
         patients_layout.addWidget(patients_icon)
         patients_layout.addWidget(patients_btn, 1)
         patients_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(patients_layout)
+        upper_layout.addLayout(patients_layout)
 
         # 2. Import Data Button
         import_layout = QHBoxLayout()
-        import_icon = QLabel("📥")  # Import icon
+        import_icon = QLabel("📥")
         import_icon.setStyleSheet("font-size: 28px;")
         import_btn = QPushButton("Import Data")
-        import_btn.setMinimumHeight(45)
+        import_btn.setMinimumHeight(50)
         import_layout.addWidget(import_icon)
         import_layout.addWidget(import_btn, 1)
         import_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(import_layout)
+        upper_layout.addLayout(import_layout)
 
         # 3. Settings Button
         settings_layout = QHBoxLayout()
-        settings_icon = QLabel("⚙️")  # Settings icon
+        settings_icon = QLabel("⚙️")
         settings_icon.setStyleSheet("font-size: 28px;")
         settings_btn = QPushButton("Settings")
-        settings_btn.setMinimumHeight(45)
+        settings_btn.setMinimumHeight(50)
         settings_layout.addWidget(settings_icon)
         settings_layout.addWidget(settings_btn, 1)
         settings_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(settings_layout)
+        upper_layout.addLayout(settings_layout)
 
         # 4. Help Button
         help_layout = QHBoxLayout()
-        help_icon = QLabel("❓")  # Help icon
+        help_icon = QLabel("❓")
         help_icon.setStyleSheet("font-size: 28px;")
         help_btn = QPushButton("Help")
-        help_btn.setMinimumHeight(45)
+        help_btn.setMinimumHeight(50)
         help_layout.addWidget(help_icon)
         help_layout.addWidget(help_btn, 1)
         help_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addLayout(help_layout)
+        upper_layout.addLayout(help_layout)
 
-        # === Patient Info (wird sichtbar wenn Patient ausgewählt) ===
-        layout.addSpacing(30)
+        upper_layout.addStretch()  # Fill rest of upper half
+        main_layout.addWidget(upper_container, 1)  # UPPER HALF: 50% of sidebar height
 
-        # Patient Name Display (non-clickable)
+        # === LOWER HALF (50% height): Patient Info ===
+        lower_container = QWidget()
+        lower_layout = QVBoxLayout(lower_container)
+        lower_layout.setContentsMargins(0, 0, 0, 0)
+        lower_layout.setSpacing(10)
+
+        # Patient Name Display (non-clickable) - STARTS AT 50% HEIGHT
         self.patient_name_display = QPushButton()
         self.patient_name_display.setText("No patient selected")
         self.patient_name_display.setEnabled(False)
-        self.patient_name_display.setMinimumHeight(50)
+        self.patient_name_display.setMinimumHeight(55)
         self.patient_name_display.setStyleSheet(
             "QPushButton { "
             "background-color: #e7ecf8; "
             "color: #333333; "
             "border: 1px solid #cccccc; "
             "border-radius: 4px; "
-            "padding: 8px; "
+            "padding: 10px; "
             "font-weight: bold; "
             "text-align: left; "
+            "font-size: 12px; "
             "}"
         )
-        layout.addWidget(self.patient_name_display)
+        lower_layout.addWidget(self.patient_name_display)
 
-        # Recordings Dropdown
+        # ADJUST: Spacing between patient name and recordings label
+        # Recordings Label
         self.recordings_label = QLabel("Recordings:")
-        self.recordings_label.setStyleSheet("color: white; font-weight: bold;")
-        layout.addWidget(self.recordings_label)
+        self.recordings_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px;")
+        lower_layout.addWidget(self.recordings_label)
 
         # Dummy for now - will be replaced with QComboBox
         self.recordings_dropdown = QLabel("(No recordings)")
-        self.recordings_dropdown.setStyleSheet("color: #cccccc;")
-        layout.addWidget(self.recordings_dropdown)
+        self.recordings_dropdown.setStyleSheet("color: #cccccc; font-size: 12px;")
+        lower_layout.addWidget(self.recordings_dropdown)
 
-        # Spacer to push everything to top
-        layout.addStretch()
+        lower_layout.addStretch()  # LOWER HALF: Fill remaining space
+        main_layout.addWidget(lower_container, 1)  # LOWER HALF: 50% of sidebar height
 
         self.setFixedWidth(220)
 

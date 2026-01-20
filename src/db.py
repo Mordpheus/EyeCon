@@ -49,18 +49,18 @@ class PatientDataManager:
             """
         )
 
-        # === RECORDING TABELLE ===
-        # Speichert Messdaten/Aufnahmen direkt in SQLite (kompatibel mit TBI_Headset)
-        # NICHT mehr wie früher measurement mit JSON-Wrapper!
+        # === RECORDING TABLE ===
+        # Stores measurement/recording data directly in SQLite (compatible with TBI_Headset)
+        # NO MORE JSON wrapper like the old measurement table!
         # 
-        # Spalten:
-        #   id (TEXT PK)      - Eindeutige ID der Aufnahme (kommt von TBI_Headset)
-        #   patientId (INT)   - Fremdschlüssel zu patient.id (Mit Cascade Delete)
-        #   date (INT)        - Unix Timestamp wann die Aufnahme gemacht wurde
-        #   baseline (INT)    - Flag: 0=normale Messung, 1=Baseline-Messung
+        # Columns:
+        #   id (TEXT PK)      - Unique recording ID (from TBI_Headset)
+        #   patientId (INT)   - Foreign key to patient.id (with Cascade Delete)
+        #   date (INT)        - Unix timestamp when recording was made
+        #   baseline (INT)    - Flag: 0=normal recording, 1=baseline recording
         #
-        # WICHTIG: Keine JSON-Daten mehr! Alles ist direkt in SQLite gespeichert.
-        #          Das macht Queries einfacher und schneller.
+        # IMPORTANT: No more JSON data! Everything stored directly in SQLite.
+        #            This makes queries simpler and faster.
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS recording (
@@ -153,133 +153,133 @@ class PatientDataManager:
 
     def add_recording(self, recording_id: str, patient_id: int, date: int, baseline: int = 0) -> str:
         """
-        Speichert eine neue Aufnahme/Messung in der Datenbank.
+        Store a new recording/measurement in the database.
         
-        Diese Methode schreibt direkt in die recording-Tabelle (nicht mehr measurement!)
-        Eine Aufnahme besteht aus:
-        - recording_id: Eindeutige Text-ID (z.B. von TBI_Headset import)
-        - patient_id: Welcher Patient diese Aufnahme gemacht hat
-        - date: Unix Timestamp (Sekunden seit 1970) wann aufgenommen
-        - baseline: 1=Baseline (Referenzmessung), 0=normale Messung
+        This method writes directly to the recording table (not measurement!)
+        A recording consists of:
+        - recording_id: Unique text ID (e.g. from TBI_Headset import)
+        - patient_id: Which patient made this recording
+        - date: Unix timestamp (seconds since 1970) when recorded
+        - baseline: 1=baseline (reference measurement), 0=normal recording
         
-        Datenbankoperation: INSERT INTO recording
-        Rückgabe: Die gespeicherte recording_id
+        Database operation: INSERT INTO recording
+        Returns: The stored recording_id
         """
         cur = self.conn.cursor()
-        # INSERT: Neue Zeile in recording-Tabelle mit allen 4 Spalten
+        # INSERT: New row in recording table with all 4 columns
         cur.execute(
             "INSERT INTO recording (id, patientId, date, baseline) VALUES (?, ?, ?, ?)",
             (recording_id, patient_id, date, baseline)
         )
-        # COMMIT: Persistiert die Änderung in SQLite
+        # COMMIT: Persist change to SQLite
         self.conn.commit()
         return recording_id
 
     def get_recordings(self, patient_id: int) -> List[Dict[str, Any]]:
         """
-        Liest alle Aufnahmen eines Patienten aus der Datenbank.
+        Retrieve all recordings of a patient from the database.
         
-        Datenbankoperation: SELECT * FROM recording WHERE patientId = ?
-        - Filtert nach patient_id
-        - Sortiert nach date DESC (neueste zuerst)
-        - Rückgabe: Liste von Dicts mit allen recording-Spalten
+        Database operation: SELECT * FROM recording WHERE patientId = ?
+        - Filters by patient_id
+        - Sorts by date DESC (newest first)
+        - Returns: List of dicts with all recording columns
         
-        Beispiel Rückgabe:
+        Example return:
         [
           {'id': 'REC001', 'patientId': 5, 'date': 1704067200, 'baseline': 1},
           {'id': 'REC002', 'patientId': 5, 'date': 1704153600, 'baseline': 0},
         ]
         """
         cur = self.conn.cursor()
-        # SELECT: Alle Spalten (id, patientId, date, baseline) für diesen Patient
+        # SELECT: All columns (id, patientId, date, baseline) for this patient
         cur.execute("SELECT * FROM recording WHERE patientId = ? ORDER BY date DESC", (patient_id,))
-        # FETCH: Holt alle passenden Zeilen
+        # FETCH: Get all matching rows
         rows = cur.fetchall()
-        # CONVERT: sqlite3.Row Objekte zu Python Dicts
+        # CONVERT: sqlite3.Row objects to Python dicts
         return [dict(row) for row in rows]
 
     def get_baseline_recording(self, patient_id: int) -> Dict[str, Any] | None:
         """
-        Liest die Baseline-Aufnahme eines Patienten.
+        Retrieve the baseline recording of a patient.
         
-        Datenbankoperation: SELECT * FROM recording WHERE patientId = ? AND baseline = 1
-        - Filtert nach patient_id UND baseline=1
-        - LIMIT 1: Gibt höchstens eine Zeile zurück
-        - Rückgabe: Ein Dict oder None wenn keine gefunden
+        Database operation: SELECT * FROM recording WHERE patientId = ? AND baseline = 1
+        - Filters by patient_id AND baseline=1
+        - LIMIT 1: Returns at most one row
+        - Returns: A dict or None if not found
         
-        Baseline-Aufnahmen sind Referenzmessungen für Vergleiche.
+        Baseline recordings are reference measurements for comparisons.
         """
         cur = self.conn.cursor()
-        # SELECT: Suche baseline-Aufnahme für diesen Patient
+        # SELECT: Find baseline recording for this patient
         cur.execute("SELECT * FROM recording WHERE patientId = ? AND baseline = 1 LIMIT 1", (patient_id,))
-        # FETCH ONE: Holt maximal eine Zeile
+        # FETCH ONE: Get at most one row
         row = cur.fetchone()
-        # CONVERT: sqlite3.Row zu Dict, oder None wenn nicht gefunden
+        # CONVERT: sqlite3.Row to dict, or None if not found
         return dict(row) if row else None
 
     def import_from_tbi_headset(self, tbi_db_path: str) -> Dict[str, Any]:
         """
-        Importiert Patientendaten und Aufnahmen aus einer TBI_Headset Datenbank-ZIP.
+        Import patient data and recordings from a TBI_Headset database ZIP.
         
         WORKFLOW:
-        1. Öffnet TBI_Headset Datenbank (read-only)
-        2. Liest alle Patienten und speichert sie in EyeCon (mit ID-Mapping)
-        3. Liest alle Aufnahmen und mapped sie zu den neuen Patienten
-        4. Gibt Statistik zurück (wie viele importiert, Fehler)
+        1. Open TBI_Headset database (read-only)
+        2. Read all patients and store them in EyeCon (with ID mapping)
+        3. Read all recordings and map them to new patients
+        4. Return statistics (how many imported, errors)
         
         SCHEMA-MAPPING:
         TBI_Headset.Patient.id          → EyeCon.patient.external_id
         TBI_Headset.Patient.sex         → EyeCon.patient.sex
         TBI_Headset.Patient.birthdate   → EyeCon.patient.birthdate
         
-        TBI_Headset.Recording.id        → EyeCon.recording.id (direkt!)
-        TBI_Headset.Recording.patientId → EyeCon.recording.patientId (via Lookup)
+        TBI_Headset.Recording.id        → EyeCon.recording.id (directly!)
+        TBI_Headset.Recording.patientId → EyeCon.recording.patientId (via lookup)
         TBI_Headset.Recording.date      → EyeCon.recording.date
         TBI_Headset.Recording.baseline  → EyeCon.recording.baseline
         
-        WICHTIG: Das ist ein IMPORT von außen, NICHT modifiziert von EyeCon!
+        IMPORTANT: This is an IMPORT from outside, NOT modified by EyeCon!
         
         Args:
-            tbi_db_path: Pfad zur TBI_Headset patient_database.db Datei
+            tbi_db_path: Path to TBI_Headset patient_database.db file
             
         Returns:
-            Dictionary mit Import-Ergebnissen:
-            - imported_patients: Anzahl erfolgreich importierter Patienten
-            - imported_recordings: Anzahl erfolgreich importierter Aufnahmen
-            - skipped_recordings: Anzahl übersprungener Aufnahmen (Fehler)
-            - errors: Liste mit Error-Messages
+            Dictionary with import results:
+            - imported_patients: Count of successfully imported patients
+            - imported_recordings: Count of successfully imported recordings
+            - skipped_recordings: Count of skipped recordings (errors)
+            - errors: List with error messages
         """
         import sqlite3
         
-        # === RESULT DICT FÜR STATISTIK ===
-        # Wird am Ende zurückgegeben um dem Benutzer zu zeigen was passiert ist
+        # === RESULT DICT FOR STATISTICS ===
+        # Returned at the end to show the user what happened
         result = {
-            'imported_patients': 0,      # Wie viele Patienten erfolgreich eingefügt
-            'imported_recordings': 0,    # Wie viele Aufnahmen erfolgreich eingefügt
-            'skipped_recordings': 0,     # Wie viele Aufnahmen übersprungen (Fehler/Patient nicht gefunden)
-            'errors': []                 # Liste mit Error-Messages
+            'imported_patients': 0,      # How many patients successfully inserted
+            'imported_recordings': 0,    # How many recordings successfully inserted
+            'skipped_recordings': 0,     # How many recordings skipped (errors/patient not found)
+            'errors': []                 # List with error messages
         }
         
         try:
-            # === DATENBANKVERBINDUNG ZUR TBI_HEADSET DATENBANK ===
-            # Wichtig: mode=ro (read-only) - wir verändern TBI Datenbank NICHT!
-            # Das ist ein reiner Import/Lesezugriff
+            # === DATABASE CONNECTION TO TBI_HEADSET DATABASE ===
+            # Important: mode=ro (read-only) - we do NOT modify TBI database!
+            # This is pure read-only import access
             tbi_conn = sqlite3.connect(f'file:{tbi_db_path}?mode=ro', uri=True)
             tbi_conn.row_factory = sqlite3.Row
             tbi_cur = tbi_conn.cursor()
             
-            # === PHASE 1: PATIENTEN IMPORTIEREN ===
-            # Liest ALLE Patienten aus TBI_Headset Datenbank
-            # Speichert sie in EyeCon patient-Tabelle
-            # Erstellt id_mapping Dict zum späteren Lookup von Aufnahmen
+            # === PHASE 1: IMPORT PATIENTS ===
+            # Read ALL patients from TBI_Headset database
+            # Store them in EyeCon patient table
+            # Create id_mapping dict for later recording lookup
             try:
-                # SELECT: Alle Patienten aus TBI Datenbank
+                # SELECT: All patients from TBI database
                 tbi_cur.execute("SELECT id, sex, birthdate FROM Patient")
                 tbi_patients = tbi_cur.fetchall()
                 
-                # WICHTIG: id_mapping verbindet TBI patient_ids mit EyeCon patient_ids
-                # Wird später verwendet um Aufnahmen dem richtigen Patienten zuzuordnen
-                # Beispiel: id_mapping['TBI_P001'] = 5  (EyeCon patient.id)
+                # IMPORTANT: id_mapping links TBI patient_ids with EyeCon patient_ids
+                # Used later to map recordings to the correct patient
+                # Example: id_mapping['TBI_P001'] = 5  (EyeCon patient.id)
                 id_mapping = {}
                 
                 for tbi_patient in tbi_patients:
@@ -292,24 +292,24 @@ class PatientDataManager:
                     last_name = "TBI_Import"
                     
                     try:
-                        # DATENBANKOPERATION: INSERT in EyeCon patient-Tabelle
-                        # external_id = TBI patient_id (für Nachverfolgung/Auditing)
+                        # DATABASE OPERATION: INSERT into EyeCon patient table
+                        # external_id = TBI patient_id (for tracking/auditing)
                         eyecon_id = self.create_patient(
                             first_name=first_name,
                             last_name=last_name,
                             birthdate=birthdate,
-                            external_id=tbi_id  # ← Wichtig: Speichert Original TBI ID
+                            external_id=tbi_id  # ← Important: Store original TBI ID
                         )
                         
-                        # MAPPING SPEICHERN: TBI ID → EyeCon ID
-                        # Wird nachher für Recording-Import benötigt
+                        # SAVE MAPPING: TBI ID → EyeCon ID
+                        # Needed later for recording import
                         id_mapping[tbi_id] = eyecon_id
                         
-                        # DATENBANKOPERATION: UPDATE für sex-Feld
-                        # (create_patient() setzt sex nicht, darum separate UPDATE)
+                        # DATABASE OPERATION: UPDATE sex field
+                        # (create_patient() doesn't set sex, so separate UPDATE)
                         cur = self.conn.cursor()
                         cur.execute("UPDATE patient SET sex = ? WHERE id = ?", (sex, eyecon_id))
-                        self.conn.commit()  # ← Persistiert Update in SQLite
+                        self.conn.commit()  # ← Persist update to SQLite
                         
                         result['imported_patients'] += 1
                         
@@ -320,12 +320,12 @@ class PatientDataManager:
             except Exception as e:
                 result['errors'].append(f"Error reading TBI patients: {str(e)}")
             
-            # === PHASE 2: AUFNAHMEN/RECORDINGS IMPORTIEREN ===
-            # Liest ALLE Aufnahmen aus TBI_Headset Datenbank
-            # Mapped patient_id via id_mapping Dictionary
-            # Speichert sie in EyeCon recording-Tabelle
+            # === PHASE 2: IMPORT RECORDINGS ===
+            # Read ALL recordings from TBI_Headset database
+            # Map patient_id via id_mapping dictionary
+            # Store them in EyeCon recording table
             try:
-                # SELECT: Alle Aufnahmen mit ihren Metadaten
+                # SELECT: All recordings with their metadata
                 tbi_cur.execute("SELECT id, patientId, date, baseline FROM Recording")
                 tbi_recordings = tbi_cur.fetchall()
                 
@@ -335,27 +335,27 @@ class PatientDataManager:
                     date = tbi_recording['date']
                     baseline = tbi_recording['baseline']
                     
-                    # WICHTIG: Lookup EyeCon patient_id via id_mapping
-                    # Wenn Patient nicht in Import vorhanden → Fehler und überspringen
+                    # IMPORTANT: Lookup EyeCon patient_id via id_mapping
+                    # If patient not in import → error and skip
                     if tbi_patient_id not in id_mapping:
                         result['errors'].append(f"Recording {tbi_recording_id}: Patient {tbi_patient_id} not found in import")
                         result['skipped_recordings'] += 1
-                        continue  # → Nächste Aufnahme
+                        continue  # → Next recording
                     
-                    # MAPPING: TBI patient_id → EyeCon patient_id (via Lookup)
+                    # MAPPING: TBI patient_id → EyeCon patient_id (via lookup)
                     eyecon_patient_id = id_mapping[tbi_patient_id]
                     
                     try:
-                        # DATENBANKOPERATION: INSERT in EyeCon recording-Tabelle
-                        # recording_id: Von TBI direkt übernommen (TEXT Primary Key)
-                        # patient_id: Über id_mapping gemappter EyeCon patient
-                        # date: Unix Timestamp von TBI
-                        # baseline: Flag ob Baseline-Messung oder nicht
+                        # DATABASE OPERATION: INSERT into EyeCon recording table
+                        # recording_id: Taken directly from TBI (TEXT Primary Key)
+                        # patient_id: EyeCon patient mapped via id_mapping
+                        # date: Unix timestamp from TBI
+                        # baseline: Flag if baseline measurement or not
                         self.add_recording(
-                            recording_id=str(tbi_recording_id),  # TBI ID als PK
-                            patient_id=eyecon_patient_id,        # Gemappter EyeCon ID
+                            recording_id=str(tbi_recording_id),  # TBI ID as PK
+                            patient_id=eyecon_patient_id,        # Mapped EyeCon ID
                             date=int(date) if date else 0,       # Unix timestamp
-                            baseline=int(baseline) if baseline else 0  # 0 oder 1
+                            baseline=int(baseline) if baseline else 0  # 0 or 1
                         )
                         
                         result['imported_recordings'] += 1

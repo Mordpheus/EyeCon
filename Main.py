@@ -6,8 +6,7 @@ Starts the application with a main window and layout.
 
 import sys
 from PySide6.QtWidgets import QApplication, QMainWindow
-from app_layout import AppLayout
-
+from app_layout import AppLayout 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

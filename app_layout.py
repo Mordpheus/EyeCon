@@ -1,6 +1,7 @@
 from pathlib import Path
+from datetime import datetime
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
@@ -108,15 +109,42 @@ class LeftArea(QWidget):
         )
         lower_layout.addWidget(self.patient_name_display)
 
-        # ADJUST: Spacing between patient name and recordings label
-        # Recordings Label
+        # === Recordings Section: Label + Dropdown ===
+        # Displays all recordings for currently selected patient
+        # User can select a recording from the dropdown to analyze it
+        
+        # Recordings label - descriptive text
         self.recordings_label = QLabel("Recordings:")
         self.recordings_label.setStyleSheet("color: white; font-weight: bold; font-size: 13px;")
         lower_layout.addWidget(self.recordings_label)
 
-        # Dummy for now - will be replaced with QComboBox
-        self.recordings_dropdown = QLabel("(No recordings)")
-        self.recordings_dropdown.setStyleSheet("color: #cccccc; font-size: 12px;")
+        # === QComboBox: Recordings Dropdown ===
+        # Displays list of recordings for selected patient
+        # Initially empty - populated when patient is selected
+        # User selection triggers analysis screen update (Iteration 4.2)
+        self.recordings_dropdown = QComboBox()
+        self.recordings_dropdown.setMinimumHeight(35)
+        self.recordings_dropdown.setStyleSheet(
+            "QComboBox { "
+            "background-color: #ffffff; "
+            "color: #333333; "
+            "border: 1px solid #cccccc; "
+            "border-radius: 3px; "
+            "padding: 5px; "
+            "font-size: 11px; "
+            "} "
+            "QComboBox::drop-down { "
+            "border: none; "
+            "} "
+            "QComboBox QAbstractItemView { "
+            "background-color: #ffffff; "
+            "color: #333333; "
+            "selection-background-color: #d0dff0; "
+            "}"
+        )
+        # Add placeholder item when no recordings available
+        self.recordings_dropdown.addItem("-- Select a recording --")
+        self.recordings_dropdown.setEnabled(False)  # Disabled until patient selected
         lower_layout.addWidget(self.recordings_dropdown)
 
         lower_layout.addStretch()  # LOWER HALF: Fill remaining space
@@ -130,8 +158,16 @@ class LeftArea(QWidget):
         self.btn_settings = settings_btn
         self.btn_help = help_btn
 
-    def set_selected_patient(self, patient_name: str) -> None:
-        """Update patient name display in sidebar."""
+    def set_selected_patient(self, patient_name: str, patient_id: int = None) -> None:
+        """
+        Update patient name display and load recordings for selected patient.
+        
+        Parameters:
+            patient_name (str): Full name of the patient (first + last)
+            patient_id (int): Database ID of the selected patient
+                Passed from CenterArea to load recordings
+        """
+        # Update patient name display with highlighted styling
         self.patient_name_display.setText(patient_name)
         self.patient_name_display.setStyleSheet(
             "QPushButton { "
@@ -144,6 +180,62 @@ class LeftArea(QWidget):
             "text-align: left; "
             "}"
         )
+        
+        # Load recordings for this patient into the dropdown
+        if patient_id is not None:
+            self._load_recordings_for_patient(patient_id)
+    
+    def _load_recordings_for_patient(self, patient_id: int) -> None:
+        """
+        Signal handler placeholder for loading recordings.
+        
+        This method will be called when patient is selected.
+        Actual recording loading happens in AppLayout._on_patient_selected
+        which has access to CenterArea.manager
+        
+        Parameters:
+            patient_id (int): Database ID of the patient
+        """
+        # Placeholder - implementation in AppLayout
+        pass
+    
+    def update_recordings_dropdown(self, recordings: list) -> None:
+        """
+        Update recordings dropdown with fetched recording data.
+        
+        Called from AppLayout after fetching recordings from database.
+        Each recording item is formatted as: "Recording ID - Date"
+        
+        Parameters:
+            recordings (list): List of recording dictionaries from database
+                Each dict contains: {id, date, baseline}
+        """
+        # Clear all existing items from dropdown
+        self.recordings_dropdown.clear()
+        
+        # If no recordings, show placeholder and disable
+        if not recordings:
+            self.recordings_dropdown.addItem("-- No recordings --")
+            self.recordings_dropdown.setEnabled(False)
+            return
+        
+        # Add each recording to dropdown with formatted display text
+        for rec in recordings:
+            # Extract recording ID and timestamp
+            rec_id = rec.get("id", "Unknown")
+            date_unix = rec.get("date", 0)
+            
+            # Convert Unix timestamp to human-readable format
+            date_str = datetime.fromtimestamp(date_unix).strftime("%Y-%m-%d %H:%M")
+            
+            # Create display text: "REC_001 - 2024-01-15 14:30"
+            display_text = f"{rec_id} - {date_str}"
+            
+            # Add to dropdown with complete recording object as user data
+            self.recordings_dropdown.addItem(display_text, rec)
+        
+        # Enable dropdown now that recordings are available
+        self.recordings_dropdown.setEnabled(True)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -203,61 +295,124 @@ class CenterArea(QWidget):
         self.btn_edit.clicked.connect(self._on_edit_clicked)
 
     def _on_patient_selected(self, patient_id: int) -> None:
-        # Store currently selected patient ID
+        """
+        Handle patient selection from PatientListWidget.
+        
+        This method:
+        1. Stores selected patient ID for CRUD operations
+        2. Fetches patient data from database
+        3. Updates sidebar with patient name and recordings
+        
+        Parameters:
+            patient_id (int): Database ID of selected patient
+        """
+        # Store currently selected patient ID for CRUD operations
         self.selected_patient_id = patient_id
+        
+        # Fetch patient data from database
+        patient = self.manager.get_patient(patient_id)
+        if patient:
+            # Format patient name for display: "LastName, FirstName"
+            patient_name = f"{patient['last_name']}, {patient['first_name']}"
+            
+            # Update sidebar patient display and load recordings
+            # Pass patient_id to trigger recordings update in LeftArea
+            self.parent().left.set_selected_patient(patient_name, patient_id)
+            
+            # Fetch all recordings for this patient from database
+            recordings = self.manager.get_recordings(patient_id)
+            
+            # Update recordings dropdown in sidebar with fetched data
+            self.parent().left.update_recordings_dropdown(recordings)
 
     def _on_create_clicked(self) -> None:
-        # Open create dialog and save new patient
+        """
+        Handle create patient button click.
+        
+        Opens dialog for new patient data entry.
+        On acceptance, creates patient in database and adds to list.
+        """
+        # Open create patient dialog
         dlg = CreatePatientDialog(self)
         if dlg.exec() == QDialog.Accepted:
             data = dlg.get_patient_data()
             if data:
+                # Create new patient in database
                 patient_id = self.manager.create_patient(
                     first_name=data["first_name"],
                     last_name=data["last_name"],
                     birthdate=data["birthdate"]
                 )
+                # Fetch patient from database (includes auto-generated ID)
                 patient = self.manager.get_patient(patient_id)
                 if patient:
+                    # Add to patient list UI
                     self.patient_list.add_patient(patient)
 
     def _on_delete_clicked(self) -> None:
-        # Open confirmation dialog and delete on approval
+        """
+        Handle delete patient button click.
+        
+        Shows confirmation dialog.
+        On approval, deletes patient from database and removes from UI list.
+        """
+        # Check if patient is selected
         if self.selected_patient_id is None:
             QMessageBox.information(self, "Info", "No patient selected.")
             return
+        
+        # Fetch patient data for confirmation dialog
         patient = self.manager.get_patient(self.selected_patient_id)
+        
+        # Open confirmation dialog
         dlg = DeleteConfirmDialog(self)
         if dlg.ask():
-            # Delete from data manager and remove from list
+            # Delete from database
             self.manager.delete_patient(self.selected_patient_id)
+            # Remove from UI list
             self.patient_list.remove_patient(self.selected_patient_id)
+            # Clear selection and recordings display
             self.selected_patient_id = None
+            self.parent().left.patient_name_display.setText("No patient selected")
+            self.parent().left.recordings_dropdown.clear()
+            self.parent().left.recordings_dropdown.addItem("-- Select a recording --")
+            self.parent().left.recordings_dropdown.setEnabled(False)
 
     def _on_edit_clicked(self) -> None:
-        # Open edit dialog, save changes and refresh list
+        """
+        Handle edit patient button click.
+        
+        Shows edit dialog with current patient data.
+        On approval, updates patient in database and refreshes UI list.
+        """
+        # Check if patient is selected
         if self.selected_patient_id is None:
             QMessageBox.information(self, "Info", "No patient selected.")
             return
+        
+        # Fetch patient from database
         patient = self.manager.get_patient(self.selected_patient_id)
         if not patient:
             QMessageBox.warning(self, "Error", "Patient not found.")
             return
+        
+        # Open edit patient dialog
         dlg = EditPatientDialog(self, patient_data=patient)
         if dlg.exec() == QDialog.Accepted:
             updated = dlg.get_patient_data()
             if updated:
+                # Update patient in database
                 self.manager.update_patient(
                     self.selected_patient_id,
                     first_name=updated["first_name"],
                     last_name=updated["last_name"],
                 )
-                # Recreate button (simple refresh)
+                # Refresh UI: remove old button and add updated one
                 self.patient_list.remove_patient(self.selected_patient_id)
                 refreshed = self.manager.get_patient(self.selected_patient_id)
                 if refreshed:
                     self.patient_list.add_patient(refreshed)
-                    # Restore selection
+                    # Restore selection to updated patient
                     self.patient_list.select_patient(self.selected_patient_id)
 
     def paintEvent(self, event: QPaintEvent) -> None:

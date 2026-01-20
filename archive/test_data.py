@@ -31,20 +31,21 @@ dm.update_patient(1, nachname='Neumann')
 updated = dm.get_patient(1)
 print(f"✓ Neuer Nachname: {updated['nachname']}\n")
 
-# Test 5: Speichere Messungen
-print("Test 5: Speichere Baseline-Messung für Patient 1")
-measurement = dm.add_measurement(
+# Test 5: Speichere Recordings
+print("Test 5: Speichere Baseline-Recording für Patient 1")
+recording = dm.add_recording(
+    recording_id="REC_001",
     patient_id=1,
-    measurement_type="baseline",
-    data={"wert": 42.5, "einheit": "cm"}
+    date=1704067200,
+    baseline=1
 )
-print(f"✓ Messung gespeichert: ID {measurement['id']}\n")
+print(f"✓ Recording gespeichert: ID {recording}\n")
 
-# Test 6: Lese Messungen
-print("Test 6: Lese alle Messungen von Patient 1")
-messungen = dm.get_measurements(1)
-for m in messungen:
-    print(f"  – Messung {m['id']}: {m['type']} – Daten: {m['data']}")
+# Test 6: Lese Recordings
+print("Test 6: Lese alle Recordings von Patient 1")
+recordings = dm.get_recordings(1)
+for r in recordings:
+    print(f"  – Recording {r['id']}: Datum {r['date']} – Baseline: {r['baseline']}")
 print()
 
 # Test 7: Lösche Patient

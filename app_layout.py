@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
 from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog
 from data_manager import PatientDataManager
+from src.importer import TBIHeadsetImporter
 
 
 # -------------------------------------------------
@@ -46,10 +47,10 @@ class LeftArea(QWidget):
         import_layout = QHBoxLayout()
         import_icon = QLabel("📥")
         import_icon.setStyleSheet("font-size: 28px;")
-        import_btn = QPushButton("Import Data")
-        import_btn.setMinimumHeight(50)
+        self.btn_import = QPushButton("Import Data")
+        self.btn_import.setMinimumHeight(50)
         import_layout.addWidget(import_icon)
-        import_layout.addWidget(import_btn, 1)
+        import_layout.addWidget(self.btn_import, 1)
         import_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(import_layout)
 
@@ -164,6 +165,9 @@ class CenterArea(QWidget):
         # Data manager and selection state
         self.manager = PatientDataManager(Path("data/eyecon.db"))
         self.selected_patient_id = None
+        
+        # Initialize TBI_Headset importer for ZIP imports
+        self.importer = TBIHeadsetImporter(self.manager)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -311,3 +315,37 @@ class AppLayout(QWidget):
         layout.addWidget(self.left)
         layout.addWidget(self.center, 1)  # flexible
         layout.addWidget(self.right)
+        
+        # === Signal connections ===
+        # Import Button (LeftArea) → Import handler (CenterArea)
+        # When user clicks "Import Data" button, trigger TBI_Headset import workflow
+        self.left.btn_import.clicked.connect(self._on_import_clicked)
+
+    def _on_import_clicked(self):
+        """
+        Handle import button click from LeftArea.
+        
+        Workflow:
+        1. Show ZIP file dialog (user selects file)
+        2. Extract ZIP and find patient_database.db
+        3. Import patients and recordings with ID mapping
+        4. Show result dialog with statistics
+        5. Refresh patient list in CenterArea
+        """
+        # Show ZIP file selection dialog
+        zip_path = self.center.importer.show_file_dialog(self)
+        if not zip_path:
+            # User cancelled the dialog
+            return
+        
+        # Import data from selected ZIP file
+        success, result = self.center.importer.import_from_zip(zip_path)
+        
+        # Show result dialog to user (statistics and errors if any)
+        self.center.importer.show_result_dialog(self, success, result)
+        
+        # Refresh patient list in CenterArea to show newly imported patients
+        if success:
+            self.center.patient_list.clear_patients()
+            for patient in self.center.manager.get_all_patients():
+                self.center.patient_list.add_patient(patient)

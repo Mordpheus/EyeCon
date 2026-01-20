@@ -206,6 +206,20 @@ CREATE TABLE recording (
 - [ ] Rollback on critical errors (currently partial import)
 - [ ] Export patient data function (reverse operation)
 
+## 📋 ROADMAP: Iteration 4 - UI Implementation & Analysis Screen
+
+### Phase 1: Foundation (Steps 1-5)
+1. **UI Integration Testing** - Verify Import button functionality
+2. **Patient List Refresh** - Auto-refresh after import
+3. **Error Handling UI** - Result dialog with error display
+4. **Database Migration** - Migrate existing measurement → recording (if any)
+5. **Unit Testing** - Test new recording methods
+
+### Phase 2: Implementation (Iterations 4.1-4.3)
+- **Iteration 4.1:** Recordings Dropdown (QComboBox)
+- **Iteration 4.2:** Button Signal Connections
+- **Iteration 4.3:** Analysis Screen (VideoPlayer + 3 Plots)
+
 ### Session End - Part 2
 - Schema Refactoring: **measurement → recording COMPLETE**
 - All files syntax-checked ✅

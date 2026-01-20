@@ -75,6 +75,15 @@ class PatientDataManager:
 
         self.conn.commit()
 
+        # === DATABASE MIGRATION ===
+        # If old measurement table exists, migrate to new recording table
+        if not first_time:
+            migration_result = self.migrate_measurement_to_recording()
+            if migration_result['migrated'] > 0:
+                print(f"✅ Database migration: {migration_result['migrated']} records migrated")
+            if migration_result['errors']:
+                print(f"⚠️  Migration warnings: {migration_result['errors']}")
+
         # Insert sample data if database was just created
         if first_time:
             cur.execute(
@@ -217,7 +226,86 @@ class PatientDataManager:
         # CONVERT: sqlite3.Row to dict, or None if not found
         return dict(row) if row else None
 
-    def import_from_tbi_headset(self, tbi_db_path: str) -> Dict[str, Any]:
+    def migrate_measurement_to_recording(self) -> Dict[str, Any]:
+        """
+        Migrate data from old measurement table to new recording table.
+        
+        Called during database initialization if old table exists.
+        Converts measurement records to recording format:
+        - Generate recording_id from measurement id
+        - Map patient_id to patientId
+        - Extract date from recorded_at (use default if null)
+        - Use is_baseline as baseline flag
+        
+        Returns:
+            Dictionary with migration results
+        """
+        result = {
+            'migrated': 0,
+            'skipped': 0,
+            'errors': []
+        }
+        
+        cur = self.conn.cursor()
+        
+        try:
+            # Check if old measurement table exists
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='measurement'")
+            if not cur.fetchone():
+                # No old table, migration not needed
+                return result
+            
+            # Check if new recording table is empty (safety check)
+            cur.execute("SELECT COUNT(*) FROM recording")
+            if cur.fetchone()[0] > 0:
+                result['errors'].append("Recording table already has data - skipping migration")
+                return result
+            
+            # Get all measurement records
+            cur.execute("SELECT id, patient_id, recorded_at, is_baseline, data FROM measurement")
+            measurements = cur.fetchall()
+            
+            for measurement in measurements:
+                try:
+                    m_id = measurement[0]
+                    patient_id = measurement[1]
+                    recorded_at = measurement[2]
+                    is_baseline = measurement[3]
+                    data = measurement[4]
+                    
+                    # Generate recording_id (migration from measurement)
+                    recording_id = f"MIGRATED_M{m_id}"
+                    
+                    # Convert recorded_at to unix timestamp (if possible)
+                    date = 0
+                    if recorded_at:
+                        try:
+                            from datetime import datetime
+                            dt = datetime.fromisoformat(recorded_at)
+                            date = int(dt.timestamp())
+                        except:
+                            date = 0
+                    
+                    # Convert is_baseline to baseline (0 or 1)
+                    baseline = 1 if is_baseline else 0
+                    
+                    # Insert into recording table
+                    cur.execute(
+                        "INSERT INTO recording (id, patientId, date, baseline) VALUES (?, ?, ?, ?)",
+                        (recording_id, patient_id, date, baseline)
+                    )
+                    result['migrated'] += 1
+                    
+                except Exception as e:
+                    result['errors'].append(f"Error migrating measurement {m_id}: {str(e)}")
+                    result['skipped'] += 1
+            
+            self.conn.commit()
+            
+        except Exception as e:
+            result['errors'].append(f"Migration failed: {str(e)}")
+        
+        return result
         """
         Import patient data and recordings from a TBI_Headset database ZIP.
         

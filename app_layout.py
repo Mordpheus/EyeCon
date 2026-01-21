@@ -1,9 +1,9 @@
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
 from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog
 from data_manager import PatientDataManager
@@ -224,11 +224,32 @@ class LeftArea(QWidget):
             rec_id = rec.get("id", "Unknown")
             date_unix = rec.get("date", 0)
             
-            # Convert Unix timestamp to human-readable format
-            date_str = datetime.fromtimestamp(date_unix).strftime("%Y-%m-%d %H:%M")
+            # Extract filename from path (if rec_id is a file path)
+            # E.g. "/data/user/0/com.example/recording.mp4" → "recording.mp4"
+            # or "file:///.../recording.mp4" → "recording.mp4"
+            if "/" in str(rec_id):
+                display_name = str(rec_id).split("/")[-1]  # Get last part after /
+            elif "\\" in str(rec_id):
+                display_name = str(rec_id).split("\\")[-1]  # Get last part after \
+            else:
+                display_name = str(rec_id)
             
-            # Create display text: "REC_001 - 2024-01-15 14:30"
-            display_text = f"{rec_id} - {date_str}"
+            # Convert Unix timestamp to human-readable format
+            # Handle invalid timestamps (0, None, negative values)
+            if date_unix and date_unix > 0:
+                try:
+                    date_str = datetime.fromtimestamp(date_unix).strftime("%Y-%m-%d %H:%M")
+                except (OSError, ValueError, OverflowError):
+                    # Timestamp is invalid on this system
+                    date_str = ""  # Empty = no date display
+            else:
+                date_str = ""  # Empty = no date display
+            
+            # Create display text
+            if date_str:
+                display_text = f"{display_name} - {date_str}"
+            else:
+                display_text = display_name  # Just show filename if no date
             
             # Add to dropdown with complete recording object as user data
             self.recordings_dropdown.addItem(display_text, rec)
@@ -242,6 +263,110 @@ class LeftArea(QWidget):
         grad.setColorAt(0.0, QColor("#9bbcf0"))
         grad.setColorAt(1.0, QColor("#5f8fdc"))
         painter.fillRect(self.rect(), grad)
+
+
+# -------------------------------------------------
+# RECORDING PLAYER SCREEN - Video playback for recordings
+# -------------------------------------------------
+class RecordingPlayerScreen(QWidget):
+    """Screen to display and play a recording video."""
+    
+    back_clicked = Signal()  # Signal emitted when back button clicked
+    
+    def __init__(self):
+        super().__init__()
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background-color: #1a1a1a;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # === Back Button ===
+        back_btn_layout = QHBoxLayout()
+        self.back_btn = QPushButton("← Back to Patients")
+        self.back_btn.setMaximumWidth(150)
+        back_btn_layout.addWidget(self.back_btn)
+        back_btn_layout.addStretch()
+        layout.addLayout(back_btn_layout)
+        self.back_btn.clicked.connect(self.back_clicked.emit)
+        
+        # === Recording Info ===
+        self.recording_info = QLabel("No recording selected")
+        self.recording_info.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
+        layout.addWidget(self.recording_info)
+        
+        # === Video Player Placeholder ===
+        # TODO: Replace with actual video player (e.g., QMediaPlayer)
+        self.video_placeholder = QLabel("🎬 VIDEO PLAYER\n\n(Video file would be displayed here)")
+        self.video_placeholder.setStyleSheet("""
+            background-color: #2a2a2a;
+            color: #888888;
+            border: 2px dashed #555555;
+            border-radius: 8px;
+            font-size: 18px;
+            text-align: center;
+        """)
+        self.video_placeholder.setMinimumHeight(400)
+        self.video_placeholder.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.video_placeholder, 1)
+        
+        # === Recording Details ===
+        self.details_label = QLabel()
+        self.details_label.setStyleSheet("color: #cccccc; font-size: 12px;")
+        self.details_label.setWordWrap(True)
+        layout.addWidget(self.details_label)
+        
+        self.current_recording = None
+    
+    def set_recording(self, recording: dict) -> None:
+        """
+        Display a recording in the player.
+        
+        Args:
+            recording: Dictionary with keys {id, date, baseline, patientId}
+        """
+        self.current_recording = recording
+        
+        # Update info display
+        rec_id = recording.get('id', 'Unknown')
+        rec_date = recording.get('date', 0)
+        is_baseline = recording.get('baseline', 0)
+        
+        # Extract filename from path if needed
+        if "/" in str(rec_id):
+            display_name = str(rec_id).split("/")[-1]
+        elif "\\" in str(rec_id):
+            display_name = str(rec_id).split("\\")[-1]
+        else:
+            display_name = str(rec_id)
+        
+        # Format date
+        if rec_date and rec_date > 0:
+            try:
+                date_str = datetime.fromtimestamp(rec_date).strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                date_str = ""  # Empty if invalid
+        else:
+            date_str = ""  # Empty if no timestamp
+        
+        # Update labels
+        if date_str:
+            self.recording_info.setText(f"Recording: {display_name} - {date_str}")
+        else:
+            self.recording_info.setText(f"Recording: {display_name}")
+        
+        baseline_text = "✓ Baseline Recording" if is_baseline else "Normal Recording"
+        if date_str:
+            self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str}")
+        else:
+            self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: Not recorded")
+        
+        # TODO: Load actual video file here
+        # Note: Recording IDs are file paths from TBI_Headset database
+        # These files may not be accessible in the current EyeCon environment
+        # For now, show a placeholder
+        self.video_placeholder.setText(f"🎬 {display_name}\n\nVideo file path: {rec_id}\n\n(Note: Video files from TBI_Headset may not be accessible)")
 
 
 # -------------------------------------------------
@@ -277,9 +402,21 @@ class CenterArea(QWidget):
 
         layout.addLayout(button_row)
 
-        # --- Patient list ---
+        # === STACKED WIDGET: Switch between Patient List and Recording Player ===
+        self.stacked_widget = QStackedWidget()
+        
+        # Screen 1: Patient List
         self.patient_list = PatientListWidget()
-        layout.addWidget(self.patient_list, 1)
+        self.stacked_widget.addWidget(self.patient_list)
+        
+        # Screen 2: Recording Player
+        self.recording_player = RecordingPlayerScreen()
+        self.stacked_widget.addWidget(self.recording_player)
+        
+        # Show patient list by default
+        self.stacked_widget.setCurrentIndex(0)
+        
+        layout.addWidget(self.stacked_widget, 1)
 
         # Load and display patients
         for p in self.manager.get_all_patients():
@@ -292,6 +429,9 @@ class CenterArea(QWidget):
         self.btn_create.clicked.connect(self._on_create_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.btn_edit.clicked.connect(self._on_edit_clicked)
+        
+        # Connect recording player back button
+        self.recording_player.back_clicked.connect(self._on_recording_back_clicked)
 
     def _on_patient_selected(self, patient_id: int) -> None:
         """
@@ -413,6 +553,14 @@ class CenterArea(QWidget):
                     self.patient_list.add_patient(refreshed)
                     # Restore selection to updated patient
                     self.patient_list.select_patient(self.selected_patient_id)
+    
+    def _on_recording_back_clicked(self) -> None:
+        """
+        Handle back button click from RecordingPlayerScreen.
+        
+        Switch back to patient list view.
+        """
+        self.stacked_widget.setCurrentIndex(0)  # Show patient list screen
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -474,6 +622,10 @@ class AppLayout(QWidget):
         # Import Button (LeftArea) → Import handler (CenterArea)
         # When user clicks "Import Data" button, trigger TBI_Headset import workflow
         self.left.btn_import.clicked.connect(self._on_import_clicked)
+        
+        # Recording Selection (LeftArea) → Recording Player (CenterArea)
+        # When user selects a recording from dropdown, show recording player
+        self.left.recordings_dropdown.currentIndexChanged.connect(self._on_recording_selected)
 
     def _on_import_clicked(self):
         """
@@ -503,3 +655,26 @@ class AppLayout(QWidget):
             self.center.patient_list.clear_patients()
             for patient in self.center.manager.get_all_patients():
                 self.center.patient_list.add_patient(patient)
+    
+    def _on_recording_selected(self, index: int) -> None:
+        """
+        Handle recording selection from dropdown in LeftArea.
+        
+        When user selects a recording from the dropdown, display it in the
+        RecordingPlayerScreen and switch to that screen.
+        
+        Args:
+            index: Index of selected item in dropdown (0 = placeholder, 1+ = actual recordings)
+        """
+        # Skip placeholder items (index 0 or negative)
+        if index <= 0:
+            return
+        
+        # Get the recording data from the dropdown
+        recording_data = self.left.recordings_dropdown.currentData()
+        if not recording_data:
+            return
+        
+        # Set the recording in the player and show it
+        self.center.recording_player.set_recording(recording_data)
+        self.center.stacked_widget.setCurrentIndex(1)  # Show recording player screen

@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider
 )
 from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
@@ -310,6 +310,50 @@ class RecordingPlayerScreen(QWidget):
         self.media_player = QMediaPlayer(self)
         self.media_player.setVideoOutput(self.video_widget)
         
+        # === VIDEO TIMELINE ===
+        timeline_layout = QHBoxLayout()
+        timeline_layout.setContentsMargins(0, 5, 0, 5)
+        timeline_layout.setSpacing(10)
+        
+        # Time display (left side)
+        self.time_label = QLabel("00:00 / 00:00")
+        self.time_label.setStyleSheet("color: white; font-size: 11px; min-width: 80px;")
+        timeline_layout.addWidget(self.time_label)
+        
+        # Timeline slider with current position indicator
+        self.timeline_slider = QSlider(Qt.Horizontal)
+        self.timeline_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                border: 1px solid #555;
+                height: 8px;
+                background: #333;
+            }
+            QSlider::handle:horizontal {
+                background: #ff6600;
+                width: 12px;
+                margin: -2px 0;
+                border-radius: 6px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #ff8833;
+            }
+        """)
+        self.timeline_slider.setMaximum(1000)  # Use 0-1000 scale
+        self.timeline_slider.sliderMoved.connect(self.on_timeline_moved)
+        self.timeline_slider.setCursor(Qt.PointingHandCursor)
+        timeline_layout.addWidget(self.timeline_slider, 1)
+        
+        # Duration display (right side)
+        self.duration_label = QLabel("--:--")
+        self.duration_label.setStyleSheet("color: white; font-size: 11px; min-width: 40px; text-align: right;")
+        timeline_layout.addWidget(self.duration_label)
+        
+        layout.addLayout(timeline_layout)
+        
+        # Connect media player signals for timeline updates
+        self.media_player.positionChanged.connect(self.on_position_changed)
+        self.media_player.durationChanged.connect(self.on_duration_changed)
+        
         # === Playback Controls ===
         controls_layout = QHBoxLayout()
         
@@ -511,6 +555,39 @@ class RecordingPlayerScreen(QWidget):
             if '(Baseline)' in rec:
                 item.setBackground(QColor('#4a4a4a'))
             self.recording_list.addItem(item)
+    
+    def on_position_changed(self, position_ms: int) -> None:
+        """Update timeline slider and time label when video position changes."""
+        if self.media_player.duration() > 0:
+            # Update slider (0-1000 scale)
+            slider_value = int((position_ms / self.media_player.duration()) * 1000)
+            self.timeline_slider.blockSignals(True)
+            self.timeline_slider.setValue(slider_value)
+            self.timeline_slider.blockSignals(False)
+            
+            # Update time display (MM:SS / MM:SS)
+            current_secs = position_ms // 1000
+            total_secs = self.media_player.duration() // 1000
+            current_min, current_sec = divmod(current_secs, 60)
+            total_min, total_sec = divmod(total_secs, 60)
+            
+            self.time_label.setText(f"{current_min:02d}:{current_sec:02d} / {total_min:02d}:{total_sec:02d}")
+    
+    def on_duration_changed(self, duration_ms: int) -> None:
+        """Update duration label when video duration is loaded."""
+        if duration_ms > 0:
+            total_secs = duration_ms // 1000
+            total_min, total_sec = divmod(total_secs, 60)
+            self.duration_label.setText(f"{total_min:02d}:{total_sec:02d}")
+        else:
+            self.duration_label.setText("--:--")
+    
+    def on_timeline_moved(self, value: int) -> None:
+        """Handle user scrubbing on timeline slider."""
+        if self.media_player.duration() > 0:
+            # Convert slider position (0-1000) to milliseconds
+            position_ms = int((value / 1000) * self.media_player.duration())
+            self.media_player.setPosition(position_ms)
 
 
 # -------------------------------------------------

@@ -92,16 +92,68 @@ class TBIHeadsetImporter:
         
         return None
 
+    def copy_recordings_to_project(self, temp_dir: str) -> Tuple[Dict[str, str], list]:
+        """
+        Copy video files from TBI export to project recordings folder.
+        
+        Finds all videos in TBI recordings/ folder and copies them to data/recordings/.
+        Maps original TBI recording IDs to new local file paths.
+        
+        Args:
+            temp_dir: Path to extraction directory containing recordings/
+            
+        Returns:
+            Tuple (mapping: dict of recording_id→local_path, errors: list)
+        """
+        mapping = {}
+        errors = []
+        
+        try:
+            # Create recordings directory if it doesn't exist
+            recordings_dir = Path("data/recordings")
+            recordings_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Find recordings directory in extracted ZIP
+            tbi_recordings_dir = Path(temp_dir) / "recordings"
+            if not tbi_recordings_dir.exists():
+                errors.append(f"No 'recordings' directory found in ZIP at {tbi_recordings_dir}")
+                return mapping, errors
+            
+            # Copy all video files from recordings/ to data/recordings/
+            for video_file in tbi_recordings_dir.rglob("*"):
+                if video_file.is_file() and video_file.suffix.lower() in [".mp4", ".avi", ".mov", ".mkv"]:
+                    try:
+                        # Use recording filename as key
+                        local_path = recordings_dir / video_file.name
+                        
+                        # Copy file to project
+                        shutil.copy2(video_file, local_path)
+                        
+                        # Store mapping: original ID → local path
+                        mapping[str(video_file.name)] = str(local_path)
+                        
+                    except Exception as e:
+                        errors.append(f"Failed to copy {video_file.name}: {str(e)}")
+            
+            if not mapping:
+                errors.append("No video files found in recordings/ directory")
+            
+        except Exception as e:
+            errors.append(f"Error copying recordings: {str(e)}")
+        
+        return mapping, errors
+
     def import_from_zip(self, zip_path: str, parent=None) -> Tuple[bool, Dict[str, Any]]:
         """
-        Complete import workflow: extract ZIP, import database, cleanup.
+        Complete import workflow: extract ZIP, copy videos, import database, cleanup.
         
         Workflow:
         1. Extract ZIP to temporary directory
-        2. Find patient_database.db in extraction
-        3. Import data to EyeCon database
-        4. Clean up temporary files
-        5. Show result dialog
+        2. Copy videos from recordings/ to data/measurements/
+        3. Find patient_database.db in extraction
+        4. Import data to EyeCon database (with updated local video paths)
+        5. Clean up temporary files
+        6. Show result dialog
         
         Args:
             zip_path: Path to ZIP file
@@ -123,15 +175,19 @@ class TBIHeadsetImporter:
                 result['errors'].append("Failed to extract ZIP file")
                 return False, result
             
-            # Step 2: Find database in extracted files
+            # Step 2: Copy videos to project
+            video_mapping, copy_errors = self.copy_recordings_to_project(temp_dir)
+            result['errors'].extend(copy_errors)
+            
+            # Step 3: Find database in extracted files
             db_path = self.find_patient_database(temp_dir)
             if not db_path:
                 result['errors'].append("patient_database.db not found in ZIP")
                 self.cleanup()
                 return False, result
             
-            # Step 3: Import database
-            import_result = self.db_manager.import_from_tbi_headset(db_path)
+            # Step 4: Import database (pass video mapping so DB can use local paths)
+            import_result = self.db_manager.import_from_tbi_headset(db_path, video_mapping)
             result['imported_patients'] = import_result['imported_patients']
             result['imported_recordings'] = import_result['imported_recordings']
             result['errors'].extend(import_result['errors'])
@@ -143,7 +199,7 @@ class TBIHeadsetImporter:
             return False, result
             
         finally:
-            # Step 4: Clean up temporary files
+            # Step 5: Clean up temporary files
             self.cleanup()
 
     def cleanup(self):

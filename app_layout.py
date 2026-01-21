@@ -1,10 +1,14 @@
 from pathlib import Path
 from datetime import datetime
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
+from PySide6.QtMultimedia import QMediaPlayer
+from PySide6.QtMultimediaWidgets import QVideoWidget
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog
 from data_manager import PatientDataManager
 from src.importer import TBIHeadsetImporter
@@ -296,20 +300,86 @@ class RecordingPlayerScreen(QWidget):
         self.recording_info.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
         layout.addWidget(self.recording_info)
         
-        # === Video Player Placeholder ===
-        # TODO: Replace with actual video player (e.g., QMediaPlayer)
-        self.video_placeholder = QLabel("🎬 VIDEO PLAYER\n\n(Video file would be displayed here)")
-        self.video_placeholder.setStyleSheet("""
-            background-color: #2a2a2a;
-            color: #888888;
-            border: 2px dashed #555555;
-            border-radius: 8px;
-            font-size: 18px;
-            text-align: center;
+        # === Video Player with QMediaPlayer ===
+        self.video_widget = QVideoWidget()
+        self.video_widget.setStyleSheet("background-color: #000000;")
+        self.video_widget.setMinimumHeight(400)
+        layout.addWidget(self.video_widget, 1)
+        
+        # === Media Player ===
+        self.media_player = QMediaPlayer(self)
+        self.media_player.setVideoOutput(self.video_widget)
+        
+        # === Playback Controls ===
+        controls_layout = QHBoxLayout()
+        
+        self.play_btn = QPushButton("▶ Play")
+        self.pause_btn = QPushButton("⏸ Pause")
+        self.stop_btn = QPushButton("⏹ Stop")
+        
+        self.play_btn.clicked.connect(self.media_player.play)
+        self.pause_btn.clicked.connect(self.media_player.pause)
+        self.stop_btn.clicked.connect(self.media_player.stop)
+        
+        controls_layout.addWidget(self.play_btn)
+        controls_layout.addWidget(self.pause_btn)
+        controls_layout.addWidget(self.stop_btn)
+        controls_layout.addStretch()
+        
+        layout.addLayout(controls_layout)
+        
+        # === THREE PLOT AREA (Eye Tracking Visualization) ===
+        plots_container = QWidget()
+        plots_layout = QHBoxLayout(plots_container)
+        plots_layout.setContentsMargins(0, 0, 0, 0)
+        plots_layout.setSpacing(10)
+        
+        # Left: Baseline Graph
+        self.baseline_plot_widget = QWidget()
+        baseline_plot_layout = QVBoxLayout(self.baseline_plot_widget)
+        baseline_plot_layout.setContentsMargins(0, 0, 0, 0)
+        baseline_label = QLabel("Baseline Recording")
+        baseline_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
+        baseline_plot_layout.addWidget(baseline_label)
+        self.baseline_figure = Figure(figsize=(3, 2), dpi=80)
+        self.baseline_canvas = FigureCanvas(self.baseline_figure)
+        self.baseline_canvas.setStyleSheet("background-color: #1a1a1a;")
+        baseline_plot_layout.addWidget(self.baseline_canvas)
+        plots_layout.addWidget(self.baseline_plot_widget, 1)
+        
+        # Middle: Current Recording Graph (synchronized with video)
+        self.current_plot_widget = QWidget()
+        current_plot_layout = QVBoxLayout(self.current_plot_widget)
+        current_plot_layout.setContentsMargins(0, 0, 0, 0)
+        current_label = QLabel("Current Recording (Live)")
+        current_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
+        current_plot_layout.addWidget(current_label)
+        self.current_figure = Figure(figsize=(3, 2), dpi=80)
+        self.current_canvas = FigureCanvas(self.current_figure)
+        self.current_canvas.setStyleSheet("background-color: #1a1a1a;")
+        current_plot_layout.addWidget(self.current_canvas)
+        plots_layout.addWidget(self.current_plot_widget, 1)
+        
+        # Right: Recording Selection (placeholder)
+        self.recording_select_widget = QWidget()
+        recording_select_layout = QVBoxLayout(self.recording_select_widget)
+        recording_select_layout.setContentsMargins(0, 0, 0, 0)
+        select_label = QLabel("Recordings & Baselines")
+        select_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
+        recording_select_layout.addWidget(select_label)
+        self.recording_list = QListWidget()
+        self.recording_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2a2a2a;
+                color: white;
+                border: 1px solid #555;
+            }
         """)
-        self.video_placeholder.setMinimumHeight(400)
-        self.video_placeholder.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.video_placeholder, 1)
+        recording_select_layout.addWidget(self.recording_list)
+        plots_layout.addWidget(self.recording_select_widget, 1)
+        
+        layout.addWidget(plots_container, 0)
+        layout.setStretchFactor(plots_container, 0)
         
         # === Recording Details ===
         self.details_label = QLabel()
@@ -362,11 +432,85 @@ class RecordingPlayerScreen(QWidget):
         else:
             self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: Not recorded")
         
-        # TODO: Load actual video file here
+        # Load video file
         # Note: Recording IDs are file paths from TBI_Headset database
-        # These files may not be accessible in the current EyeCon environment
-        # For now, show a placeholder
-        self.video_placeholder.setText(f"🎬 {display_name}\n\nVideo file path: {rec_id}\n\n(Note: Video files from TBI_Headset may not be accessible)")
+        # Try to load the file if it exists
+        try:
+            video_path = str(rec_id)
+            if Path(video_path).exists():
+                media_url = QUrl.fromLocalFile(video_path)
+                self.media_player.setSource(media_url)
+                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n✓ Video loaded successfully")
+            else:
+                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n⚠ Video file not found at: {video_path}")
+        except Exception as e:
+            self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n⚠ Error loading video: {str(e)}")
+        
+        # === Populate Plots ===
+        self._update_plots(recording)
+    
+    def _update_plots(self, recording: dict) -> None:
+        """Update the three plot areas with current and baseline data."""
+        
+        # Clear previous plots
+        self.baseline_figure.clear()
+        self.current_figure.clear()
+        self.recording_list.clear()
+        
+        # === Left Plot: Baseline Recording (if exists) ===
+        baseline_ax = self.baseline_figure.add_subplot(111)
+        baseline_ax.set_facecolor("#1a1a1a")
+        baseline_ax.tick_params(colors='white')
+        for spine in baseline_ax.spines.values():
+            spine.set_color("#555")
+        
+        if recording.get('baseline'):
+            # Plot baseline data (placeholder - would load actual eye-tracking data)
+            baseline_ax.plot([0, 1, 2, 3], [100, 120, 110, 115], color='blue', linewidth=1.5, label='Baseline')
+            baseline_ax.set_title("Baseline Data", color='white', fontsize=10)
+            baseline_ax.set_xlabel("Time (s)", color='white', fontsize=8)
+            baseline_ax.set_ylabel("Position (px)", color='white', fontsize=8)
+            baseline_ax.legend(facecolor='#2a2a2a', edgecolor='white', fontsize=8)
+        else:
+            baseline_ax.text(0.5, 0.5, 'No Baseline Available', ha='center', va='center',
+                           transform=baseline_ax.transAxes, color='#666', fontsize=10)
+            baseline_ax.set_xticks([])
+            baseline_ax.set_yticks([])
+        
+        self.baseline_figure.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.15)
+        self.baseline_canvas.draw()
+        
+        # === Middle Plot: Current Recording (synchronized with video) ===
+        current_ax = self.current_figure.add_subplot(111)
+        current_ax.set_facecolor("#1a1a1a")
+        current_ax.tick_params(colors='white')
+        for spine in current_ax.spines.values():
+            spine.set_color("#555")
+        
+        # Plot current recording data (placeholder - would update with video playback)
+        current_ax.plot([0, 1, 2, 3], [110, 115, 125, 120], color='green', linewidth=1.5, label='Current Recording')
+        current_ax.set_title(f"Current Recording", color='white', fontsize=10)
+        current_ax.set_xlabel("Time (s)", color='white', fontsize=8)
+        current_ax.set_ylabel("Position (px)", color='white', fontsize=8)
+        current_ax.legend(facecolor='#2a2a2a', edgecolor='white', fontsize=8)
+        
+        self.current_figure.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.15)
+        self.current_canvas.draw()
+        
+        # === Right Widget: Recording Selection List ===
+        # Populate with all recordings for this patient (from parent CenterArea)
+        # For now, add placeholder entries
+        recordings = [
+            f"Recording {i+1} {'(Baseline)' if i == 0 else ''}"
+            for i in range(3)
+        ]
+        
+        for rec in recordings:
+            item = QListWidgetItem(rec)
+            item.setForeground(QColor('white'))
+            if '(Baseline)' in rec:
+                item.setBackground(QColor('#4a4a4a'))
+            self.recording_list.addItem(item)
 
 
 # -------------------------------------------------

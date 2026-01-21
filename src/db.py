@@ -318,7 +318,7 @@ class PatientDataManager:
         
         return result
 
-    def import_from_tbi_headset(self, tbi_db_path: str) -> Dict[str, Any]:
+    def import_from_tbi_headset(self, tbi_db_path: str, video_mapping: dict = None) -> Dict[str, Any]:
         """
         Import patient data and recordings from a TBI_Headset database ZIP.
         
@@ -326,7 +326,8 @@ class PatientDataManager:
         1. Open TBI_Headset database (read-only)
         2. Read all patients and store them in EyeCon (with ID mapping)
         3. Read all recordings and map them to new patients
-        4. Return statistics (how many imported, errors)
+        4. Use video_mapping to replace Android paths with local paths
+        5. Return statistics (how many imported, errors)
         
         SCHEMA-MAPPING:
         TBI_Headset.Patient.id          → EyeCon.patient.external_id
@@ -344,6 +345,7 @@ class PatientDataManager:
         
         Args:
             tbi_db_path: Path to TBI_Headset patient_database.db file
+            video_mapping: Optional dict mapping video filenames to local paths (copied from TBI export)
             
         Returns:
             Dictionary with import results:
@@ -353,6 +355,9 @@ class PatientDataManager:
             - errors: List with error messages
         """
         import sqlite3
+        
+        if video_mapping is None:
+            video_mapping = {}
         
         # === RESULT DICT FOR STATISTICS ===
         result = {
@@ -457,9 +462,23 @@ class PatientDataManager:
                         
                         eyecon_patient_id = id_mapping[tbi_patient_id]
                         
-                        # Insert recording into EyeCon
+                        # === CONVERT ANDROID PATH TO LOCAL PATH ===
+                        # TBI recording_id is Android path: /data/user/0/.../recording.mp4
+                        # Extract filename from path
+                        recording_filename = str(tbi_recording_id).split("/")[-1]
+                        
+                        # Look up local path in video_mapping
+                        if recording_filename in video_mapping:
+                            local_path = video_mapping[recording_filename]
+                        else:
+                            # Fallback: use original Android path (won't work but preserves data)
+                            local_path = str(tbi_recording_id)
+                            if not video_mapping:
+                                result['errors'].append(f"Recording {recording_filename}: No video_mapping provided")
+                        
+                        # Insert recording into EyeCon with LOCAL path
                         self.add_recording(
-                            recording_id=str(tbi_recording_id),
+                            recording_id=local_path,  # Use local path, not Android path!
                             patient_id=eyecon_patient_id,
                             date=int(date) if date else 0,
                             baseline=1 if baseline else 0

@@ -45,4 +45,9 @@ Project layout
 - `config/config.yaml` — optional overrides for defaults
 - `data/` — default folders for incoming videos and sessions
 
+## Dependencies
+
+- **PySide6** (6.7.3+) — Qt 6 GUI framework for Python
+- **matplotlib** (3.8.0+) — Plot visualization for eye-tracking analysis
+
 This repository contains a minimal working scaffold of the EyeCon desktop application. The `src/db.py` file provides a lightweight SQLite database used by the UI for development and testing.

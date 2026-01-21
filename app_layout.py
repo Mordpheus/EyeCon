@@ -154,7 +154,6 @@ class LeftArea(QWidget):
 
         # Store button references for signal connections
         self.btn_patients = patients_btn
-        self.btn_import = import_btn
         self.btn_settings = settings_btn
         self.btn_help = help_btn
 

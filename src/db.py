@@ -107,7 +107,18 @@ class PatientDataManager:
             self.conn.commit()
 
     def create_patient(self, first_name: str, last_name: str, birthdate: str, external_id: str | None = None) -> int:
-        """Create new patient record and return patient ID."""
+        """
+        Create new patient record and return patient ID.
+        
+        Args:
+            first_name: Patient first name
+            last_name: Patient last name
+            birthdate: Patient birthdate (format: DD.MM.YYYY)
+            external_id: Only set for imported patients. Manual patients should have None (no external_id).
+        
+        Returns:
+            Database ID of newly created patient
+        """
         cur = self.conn.cursor()
         cur.execute(
             "INSERT INTO patient (external_id, first_name, last_name, birthdate) VALUES (?, ?, ?, ?)",
@@ -306,6 +317,8 @@ class PatientDataManager:
             result['errors'].append(f"Migration failed: {str(e)}")
         
         return result
+
+    def import_from_tbi_headset(self, tbi_db_path: str) -> Dict[str, Any]:
         """
         Import patient data and recordings from a TBI_Headset database ZIP.
         
@@ -317,13 +330,15 @@ class PatientDataManager:
         
         SCHEMA-MAPPING:
         TBI_Headset.Patient.id          → EyeCon.patient.external_id
+        TBI_Headset.Patient.first_name  → EyeCon.patient.first_name (actual name!)
+        TBI_Headset.Patient.last_name   → EyeCon.patient.last_name (actual name!)
         TBI_Headset.Patient.sex         → EyeCon.patient.sex
         TBI_Headset.Patient.birthdate   → EyeCon.patient.birthdate
         
         TBI_Headset.Recording.id        → EyeCon.recording.id (directly!)
-        TBI_Headset.Recording.patientId → EyeCon.recording.patientId (via lookup)
+        TBI_Headset.Recording.patient_id → EyeCon.recording.patientId (via lookup)
         TBI_Headset.Recording.date      → EyeCon.recording.date
-        TBI_Headset.Recording.baseline  → EyeCon.recording.baseline
+        TBI_Headset.Recording.is_baseline → EyeCon.recording.baseline
         
         IMPORTANT: This is an IMPORT from outside, NOT modified by EyeCon!
         
@@ -340,116 +355,96 @@ class PatientDataManager:
         import sqlite3
         
         # === RESULT DICT FOR STATISTICS ===
-        # Returned at the end to show the user what happened
         result = {
-            'imported_patients': 0,      # How many patients successfully inserted
-            'imported_recordings': 0,    # How many recordings successfully inserted
-            'skipped_recordings': 0,     # How many recordings skipped (errors/patient not found)
-            'errors': []                 # List with error messages
+            'imported_patients': 0,
+            'imported_recordings': 0,
+            'skipped_recordings': 0,
+            'errors': []
         }
         
         try:
             # === DATABASE CONNECTION TO TBI_HEADSET DATABASE ===
-            # Important: mode=ro (read-only) - we do NOT modify TBI database!
-            # This is pure read-only import access
+            # mode=ro (read-only) - do NOT modify TBI database!
             tbi_conn = sqlite3.connect(f'file:{tbi_db_path}?mode=ro', uri=True)
             tbi_conn.row_factory = sqlite3.Row
             tbi_cur = tbi_conn.cursor()
             
             # === PHASE 1: IMPORT PATIENTS ===
-            # Read ALL patients from TBI_Headset database
-            # Store them in EyeCon patient table
-            # Create id_mapping dict for later recording lookup
             try:
-                # SELECT: All patients from TBI database
-                tbi_cur.execute("SELECT id, sex, birthdate FROM Patient")
+                # Try to get patient names from TBI database
+                # First check what columns exist in Patient table
+                tbi_cur.execute("SELECT id, first_name, last_name, sex, birthdate FROM Patient")
                 tbi_patients = tbi_cur.fetchall()
                 
-                # IMPORTANT: id_mapping links TBI patient_ids with EyeCon patient_ids
-                # Used later to map recordings to the correct patient
-                # Example: id_mapping['TBI_P001'] = 5  (EyeCon patient.id)
+                # id_mapping: TBI patient_id → EyeCon patient_id
                 id_mapping = {}
                 
                 for tbi_patient in tbi_patients:
-                    tbi_id = tbi_patient['id']
-                    sex = tbi_patient['sex'] or 'Unknown'
-                    birthdate = tbi_patient['birthdate'] or '01.01.1990'
-                    
-                    # Default first_name/last_name from TBI external_id
-                    first_name = f"Patient_{tbi_id[:10]}"  # Extract from ID
-                    last_name = "TBI_Import"
-                    
                     try:
-                        # DATABASE OPERATION: INSERT into EyeCon patient table
-                        # external_id = TBI patient_id (for tracking/auditing)
+                        tbi_id = tbi_patient['id']
+                        first_name = tbi_patient.get('first_name') or 'Unknown'
+                        last_name = tbi_patient.get('last_name') or 'Unknown'
+                        sex = tbi_patient.get('sex') or 'Unknown'
+                        birthdate = tbi_patient.get('birthdate') or '01.01.1990'
+                        
+                        # Create patient with REAL names from TBI, NOT dummy names
                         eyecon_id = self.create_patient(
                             first_name=first_name,
                             last_name=last_name,
                             birthdate=birthdate,
-                            external_id=tbi_id  # ← Important: Store original TBI ID
+                            external_id=tbi_id  # Store original TBI ID for audit trail
                         )
                         
-                        # SAVE MAPPING: TBI ID → EyeCon ID
-                        # Needed later for recording import
+                        # Save mapping for recording import
                         id_mapping[tbi_id] = eyecon_id
                         
-                        # DATABASE OPERATION: UPDATE sex field
-                        # (create_patient() doesn't set sex, so separate UPDATE)
+                        # Update sex field separately
                         cur = self.conn.cursor()
                         cur.execute("UPDATE patient SET sex = ? WHERE id = ?", (sex, eyecon_id))
-                        self.conn.commit()  # ← Persist update to SQLite
+                        self.conn.commit()
                         
                         result['imported_patients'] += 1
                         
                     except Exception as e:
-                        error_msg = f"Error importing patient {tbi_id}: {str(e)}"
+                        error_msg = f"Error importing patient {tbi_patient['id']}: {str(e)}"
                         result['errors'].append(error_msg)
                 
             except Exception as e:
                 result['errors'].append(f"Error reading TBI patients: {str(e)}")
             
             # === PHASE 2: IMPORT RECORDINGS ===
-            # Read ALL recordings from TBI_Headset database
-            # Map patient_id via id_mapping dictionary
-            # Store them in EyeCon recording table
             try:
-                # SELECT: All recordings with their metadata
-                tbi_cur.execute("SELECT id, patientId, date, baseline FROM Recording")
+                # Query TBI Recording table - use correct column names
+                tbi_cur.execute("SELECT id, patient_id, date, is_baseline FROM Recording")
                 tbi_recordings = tbi_cur.fetchall()
                 
                 for tbi_recording in tbi_recordings:
-                    tbi_recording_id = tbi_recording['id']
-                    tbi_patient_id = tbi_recording['patientId']
-                    date = tbi_recording['date']
-                    baseline = tbi_recording['baseline']
-                    
-                    # IMPORTANT: Lookup EyeCon patient_id via id_mapping
-                    # If patient not in import → error and skip
-                    if tbi_patient_id not in id_mapping:
-                        result['errors'].append(f"Recording {tbi_recording_id}: Patient {tbi_patient_id} not found in import")
-                        result['skipped_recordings'] += 1
-                        continue  # → Next recording
-                    
-                    # MAPPING: TBI patient_id → EyeCon patient_id (via lookup)
-                    eyecon_patient_id = id_mapping[tbi_patient_id]
-                    
                     try:
-                        # DATABASE OPERATION: INSERT into EyeCon recording table
-                        # recording_id: Taken directly from TBI (TEXT Primary Key)
-                        # patient_id: EyeCon patient mapped via id_mapping
-                        # date: Unix timestamp from TBI
-                        # baseline: Flag if baseline measurement or not
+                        tbi_recording_id = tbi_recording['id']
+                        tbi_patient_id = tbi_recording['patient_id']
+                        date = tbi_recording['date']
+                        is_baseline = tbi_recording['is_baseline']
+                        
+                        # Look up EyeCon patient_id via id_mapping
+                        if tbi_patient_id not in id_mapping:
+                            result['errors'].append(f"Recording {tbi_recording_id}: Patient {tbi_patient_id} not found")
+                            result['skipped_recordings'] += 1
+                            continue
+                        
+                        eyecon_patient_id = id_mapping[tbi_patient_id]
+                        
+                        # Insert recording into EyeCon
                         self.add_recording(
-                            recording_id=str(tbi_recording_id),  # TBI ID as PK
-                            patient_id=eyecon_patient_id,        # Mapped EyeCon ID
-                            date=int(date) if date else 0,       # Unix timestamp
-                            baseline=int(baseline) if baseline else 0  # 0 or 1
+                            recording_id=str(tbi_recording_id),
+                            patient_id=eyecon_patient_id,
+                            date=int(date) if date else 0,
+                            baseline=1 if is_baseline else 0
                         )
                         
                         result['imported_recordings'] += 1
                         
                     except Exception as e:
-                        error_msg = f"Error importing recording {tbi_recording_id}: {str(e)}"
+                        error_msg = f"Error importing recording {tbi_recording['id']}: {str(e)}"
                         result['errors'].append(error_msg)
                         result['skipped_recordings'] += 1
                 

@@ -65,10 +65,10 @@ class LeftArea(QWidget):
         settings_layout = QHBoxLayout()
         settings_icon = QLabel("⚙️")
         settings_icon.setStyleSheet("font-size: 28px;")
-        settings_btn = QPushButton("Settings")
-        settings_btn.setMinimumHeight(50)
+        self.btn_settings = QPushButton("Settings")
+        self.btn_settings.setMinimumHeight(50)
         settings_layout.addWidget(settings_icon)
-        settings_layout.addWidget(settings_btn, 1)
+        settings_layout.addWidget(self.btn_settings, 1)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(settings_layout)
 
@@ -78,10 +78,10 @@ class LeftArea(QWidget):
         help_layout = QHBoxLayout()
         help_icon = QLabel("❓")
         help_icon.setStyleSheet("font-size: 28px;")
-        help_btn = QPushButton("Help")
-        help_btn.setMinimumHeight(50)
+        self.btn_help = QPushButton("Help")
+        self.btn_help.setMinimumHeight(50)
         help_layout.addWidget(help_icon)
-        help_layout.addWidget(help_btn, 1)
+        help_layout.addWidget(self.btn_help, 1)
         help_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(help_layout)
 
@@ -155,11 +155,6 @@ class LeftArea(QWidget):
         main_layout.addWidget(lower_container, 1)  # LOWER HALF: 50% of sidebar height
 
         self.setFixedWidth(220)
-
-        # Store button references for signal connections
-        self.btn_patients = patients_btn
-        self.btn_settings = settings_btn
-        self.btn_help = help_btn
 
     def set_selected_patient(self, patient_name: str, patient_id: int = None) -> None:
         """
@@ -290,6 +285,7 @@ class RecordingPlayerScreen(QWidget):
         back_btn_layout = QHBoxLayout()
         self.back_btn = QPushButton("← Back to Patients")
         self.back_btn.setMaximumWidth(150)
+        self.back_btn.clicked.connect(self.back_clicked.emit)
         back_btn_layout.addWidget(self.back_btn)
         back_btn_layout.addStretch()
         layout.addLayout(back_btn_layout)
@@ -591,6 +587,223 @@ class RecordingPlayerScreen(QWidget):
 
 
 # -------------------------------------------------
+# HELP SCREEN
+# -------------------------------------------------
+class HelpScreen(QWidget):
+    """Help screen with Lorem Ipsum placeholder content."""
+    
+    back_clicked = Signal()
+    
+    def __init__(self):
+        super().__init__()
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background-color: white;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(10)
+        
+        # Title
+        title = QLabel("Help & Documentation")
+        title.setStyleSheet("color: black; font-weight: bold; font-size: 16px;")
+        layout.addWidget(title)
+        
+        # Content (Lorem Ipsum placeholder)
+        content = QLabel(
+            "Lorem Ipsum\n\n"
+            "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor "
+            "incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud "
+            "exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n\n"
+            "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat "
+            "nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia "
+            "deserunt mollit anim id est laborum.\n\n"
+            "Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque "
+            "laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi "
+            "architecto beatae vitae dicta sunt explicabo.\n\n"
+            "Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit, sed quia "
+            "consequuntur magni dolores eos qui ratione voluptatem sequi nesciunt."
+        )
+        content.setStyleSheet("color: black; font-size: 12px;")
+        content.setWordWrap(True)
+        layout.addWidget(content, 1)
+        
+        # Back button
+        back_btn = QPushButton("← Back to Patients")
+        back_btn.clicked.connect(self.back_clicked.emit)
+        layout.addWidget(back_btn)
+
+
+# -------------------------------------------------
+# SETTINGS SCREEN
+# -------------------------------------------------
+class SettingsScreen(QWidget):
+    """Settings screen with USB port configuration."""
+    
+    back_clicked = Signal()
+    
+    def __init__(self):
+        super().__init__()
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setStyleSheet("background-color: white;")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+        
+        # Title
+        title = QLabel("Settings")
+        title.setStyleSheet("color: black; font-weight: bold; font-size: 16px;")
+        layout.addWidget(title)
+        
+        # USB Port Selection Section
+        usb_label = QLabel("Camera USB Port")
+        usb_label.setStyleSheet("color: black; font-weight: bold; font-size: 13px;")
+        layout.addWidget(usb_label)
+        
+        # USB Port Dropdown + Camera Preview Layout
+        usb_container_layout = QHBoxLayout()
+        usb_container_layout.setSpacing(20)
+        
+        # Left side: Dropdown and Scan button
+        usb_layout = QVBoxLayout()
+        usb_layout.setSpacing(10)
+        
+        port_row = QHBoxLayout()
+        port_label = QLabel("Select Port:")
+        port_label.setStyleSheet("color: black;")
+        port_row.addWidget(port_label)
+        
+        self.port_dropdown = QComboBox()
+        self.port_dropdown.setStyleSheet("""
+            QComboBox {
+                background-color: white;
+                color: black;
+                border: 1px solid #999;
+                padding: 5px;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox QAbstractItemView {
+                background-color: white;
+                color: black;
+                selection-background-color: #e0e0e0;
+            }
+        """)
+        self.port_dropdown.addItem("-- Select USB Port --", None)
+        self.port_dropdown.addItem("COM1", "COM1")
+        self.port_dropdown.addItem("COM2", "COM2")
+        self.port_dropdown.addItem("COM3", "COM3")
+        self.port_dropdown.addItem("COM4", "COM4")
+        self.port_dropdown.currentIndexChanged.connect(self._on_port_changed)
+        port_row.addWidget(self.port_dropdown)
+        
+        # Refresh button
+        refresh_btn = QPushButton("🔄 Scan Ports")
+        refresh_btn.setMaximumWidth(120)
+        refresh_btn.clicked.connect(self._on_refresh_ports)
+        port_row.addWidget(refresh_btn)
+        
+        usb_layout.addLayout(port_row)
+        usb_container_layout.addLayout(usb_layout, 1)
+        
+        # Right side: Camera Preview (150x150)
+        preview_layout = QVBoxLayout()
+        preview_layout.setSpacing(5)
+        
+        preview_label = QLabel("Camera Preview")
+        preview_label.setStyleSheet("color: black; font-size: 11px; font-weight: bold;")
+        preview_layout.addWidget(preview_label)
+        
+        self.camera_preview = QLabel()
+        self.camera_preview.setFixedSize(150, 150)
+        self.camera_preview.setStyleSheet("""
+            QLabel {
+                background-color: #f5f5f5;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+            }
+        """)
+        self.camera_preview.setAlignment(Qt.AlignCenter)
+        self._show_no_signal()
+        preview_layout.addWidget(self.camera_preview)
+        preview_layout.addStretch()
+        
+        usb_container_layout.addLayout(preview_layout)
+        
+        layout.addLayout(usb_container_layout)
+        
+        # Spacer
+        layout.addSpacing(20)
+        
+        # Info text
+        info = QLabel(
+            "Camera Configuration:\n\n"
+            "Select the USB port where your eye-tracking camera is connected. "
+            "Use the 'Scan Ports' button to auto-detect available devices.\n\n"
+            "More camera settings will be available in future versions."
+        )
+        info.setStyleSheet("color: #666666; font-size: 11px;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+        
+        # Spacer
+        layout.addStretch()
+        
+        # Back button
+        back_btn = QPushButton("← Back to Patients")
+        back_btn.clicked.connect(self.back_clicked.emit)
+        layout.addWidget(back_btn)
+    
+    def _show_no_signal(self):
+        """Show 'No Signal' message with disconnected icon in preview."""
+        self.camera_preview.setText("⊘\n\nKein Signal")
+        self.camera_preview.setStyleSheet("""
+            QLabel {
+                background-color: #f5f5f5;
+                border: 2px solid #ddd;
+                border-radius: 5px;
+                color: #999;
+                font-size: 32px;
+                font-weight: bold;
+            }
+        """)
+    
+    def _show_connected(self, port: str):
+        """Show connected status (placeholder for live camera feed)."""
+        self.camera_preview.setText(f"✓\n\n{port}\nverbunden")
+        self.camera_preview.setStyleSheet("""
+            QLabel {
+                background-color: #e8f5e9;
+                border: 2px solid #4caf50;
+                border-radius: 5px;
+                color: #2e7d32;
+                font-size: 16px;
+                font-weight: bold;
+            }
+        """)
+        # TODO: Hier würde OpenCV Camera-Feed angezeigt
+    
+    def _on_port_changed(self, index: int):
+        """Handle USB port selection change."""
+        if index <= 0:
+            self._show_no_signal()
+            return
+        
+        port = self.port_dropdown.currentData()
+        if port:
+            # Placeholder: Versuche Camera zu öffnen (später mit OpenCV)
+            self._show_connected(port)
+        else:
+            self._show_no_signal()
+    
+    def _on_refresh_ports(self):
+        """Refresh available COM ports (placeholder)."""
+        # TODO: Implement actual COM port detection using pyserial
+        pass
+
+
+# -------------------------------------------------
 # CENTER AREA - Main content
 # -------------------------------------------------
 class CenterArea(QWidget):
@@ -623,16 +836,24 @@ class CenterArea(QWidget):
 
         layout.addLayout(button_row)
 
-        # === STACKED WIDGET: Switch between Patient List and Recording Player ===
+        # === STACKED WIDGET: Switch between different screens ===
         self.stacked_widget = QStackedWidget()
         
-        # Screen 1: Patient List
+        # Screen 0: Patient List
         self.patient_list = PatientListWidget()
         self.stacked_widget.addWidget(self.patient_list)
         
-        # Screen 2: Recording Player
+        # Screen 1: Recording Player
         self.recording_player = RecordingPlayerScreen()
         self.stacked_widget.addWidget(self.recording_player)
+        
+        # Screen 2: Help
+        self.help_screen = HelpScreen()
+        self.stacked_widget.addWidget(self.help_screen)
+        
+        # Screen 3: Settings
+        self.settings_screen = SettingsScreen()
+        self.stacked_widget.addWidget(self.settings_screen)
         
         # Show patient list by default
         self.stacked_widget.setCurrentIndex(0)
@@ -847,6 +1068,17 @@ class AppLayout(QWidget):
         # Recording Selection (LeftArea) → Recording Player (CenterArea)
         # When user selects a recording from dropdown, show recording player
         self.left.recordings_dropdown.currentIndexChanged.connect(self._on_recording_selected)
+        
+        # Settings Button → Settings Screen
+        self.left.btn_settings.clicked.connect(self._on_settings_clicked)
+        
+        # Help Button → Help Screen
+        self.left.btn_help.clicked.connect(self._on_help_clicked)
+        
+        # Back buttons from screens → Patient List
+        self.center.recording_player.back_clicked.connect(self._on_back_to_patients)
+        self.center.help_screen.back_clicked.connect(self._on_back_to_patients)
+        self.center.settings_screen.back_clicked.connect(self._on_back_to_patients)
 
     def _on_import_clicked(self):
         """
@@ -899,3 +1131,15 @@ class AppLayout(QWidget):
         # Set the recording in the player and show it
         self.center.recording_player.set_recording(recording_data)
         self.center.stacked_widget.setCurrentIndex(1)  # Show recording player screen
+    
+    def _on_help_clicked(self) -> None:
+        """Show Help screen."""
+        self.center.stacked_widget.setCurrentIndex(2)
+    
+    def _on_settings_clicked(self) -> None:
+        """Show Settings screen."""
+        self.center.stacked_widget.setCurrentIndex(3)
+    
+    def _on_back_to_patients(self) -> None:
+        """Return to Patient List screen."""
+        self.center.stacked_widget.setCurrentIndex(0)

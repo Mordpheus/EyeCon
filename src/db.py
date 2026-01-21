@@ -371,9 +371,12 @@ class PatientDataManager:
             
             # === PHASE 1: IMPORT PATIENTS ===
             try:
-                # Try to get patient names from TBI database
-                # First check what columns exist in Patient table
-                tbi_cur.execute("SELECT id, first_name, last_name, sex, birthdate FROM Patient")
+                # Check Patient table schema
+                tbi_cur.execute("PRAGMA table_info(Patient)")
+                patient_columns = {col[1]: col[2] for col in tbi_cur.fetchall()}
+                
+                # Query all data from Patient table to see what we have
+                tbi_cur.execute("SELECT * FROM Patient")
                 tbi_patients = tbi_cur.fetchall()
                 
                 # id_mapping: TBI patient_id → EyeCon patient_id
@@ -381,18 +384,31 @@ class PatientDataManager:
                 
                 for tbi_patient in tbi_patients:
                     try:
-                        tbi_id = tbi_patient['id']
-                        first_name = tbi_patient.get('first_name') or 'Unknown'
-                        last_name = tbi_patient.get('last_name') or 'Unknown'
-                        sex = tbi_patient.get('sex') or 'Unknown'
-                        birthdate = tbi_patient.get('birthdate') or '01.01.1990'
+                        # Convert sqlite3.Row to dict for easier access
+                        patient_dict = dict(tbi_patient)
                         
-                        # Create patient with REAL names from TBI, NOT dummy names
+                        # Get patient ID from TBI
+                        tbi_id = patient_dict.get('id')
+                        if not tbi_id:
+                            result['errors'].append("Patient has no ID, skipping")
+                            continue
+                        
+                        # Since TBI database doesn't have first_name/last_name,
+                        # we need to use a default name or search other tables
+                        # For now, use a generic name based on the TBI ID
+                        first_name = "Patient"
+                        last_name = str(tbi_id)
+                        
+                        # Get sex and birthdate if available
+                        sex = patient_dict.get('sex') or 'Unknown'
+                        birthdate = patient_dict.get('birthdate') or '01.01.1990'
+                        
+                        # Create patient with default names from TBI ID
                         eyecon_id = self.create_patient(
                             first_name=first_name,
                             last_name=last_name,
                             birthdate=birthdate,
-                            external_id=tbi_id  # Store original TBI ID for audit trail
+                            external_id=str(tbi_id)  # Store original TBI ID for audit trail
                         )
                         
                         # Save mapping for recording import
@@ -406,7 +422,7 @@ class PatientDataManager:
                         result['imported_patients'] += 1
                         
                     except Exception as e:
-                        error_msg = f"Error importing patient {tbi_patient['id']}: {str(e)}"
+                        error_msg = f"Error importing patient {tbi_patient.get('id')}: {str(e)}"
                         result['errors'].append(error_msg)
                 
             except Exception as e:
@@ -414,16 +430,24 @@ class PatientDataManager:
             
             # === PHASE 2: IMPORT RECORDINGS ===
             try:
-                # Query TBI Recording table - use correct column names
-                tbi_cur.execute("SELECT id, patient_id, date, is_baseline FROM Recording")
+                # Check Recording table schema
+                tbi_cur.execute("PRAGMA table_info(Recording)")
+                recording_columns = {col[1]: col[2] for col in tbi_cur.fetchall()}
+                
+                # Query TBI Recording table - use correct column names from schema
+                tbi_cur.execute("SELECT * FROM Recording")
                 tbi_recordings = tbi_cur.fetchall()
                 
                 for tbi_recording in tbi_recordings:
                     try:
-                        tbi_recording_id = tbi_recording['id']
-                        tbi_patient_id = tbi_recording['patient_id']
-                        date = tbi_recording['date']
-                        is_baseline = tbi_recording['is_baseline']
+                        # Convert sqlite3.Row to dict for easier access
+                        recording_dict = dict(tbi_recording)
+                        
+                        # Get values from TBI recording using correct column names
+                        tbi_recording_id = recording_dict.get('id')
+                        tbi_patient_id = recording_dict.get('patientId')  # Note: camelCase in TBI DB
+                        date = recording_dict.get('date') or 0
+                        baseline = recording_dict.get('baseline') or 0
                         
                         # Look up EyeCon patient_id via id_mapping
                         if tbi_patient_id not in id_mapping:
@@ -438,7 +462,7 @@ class PatientDataManager:
                             recording_id=str(tbi_recording_id),
                             patient_id=eyecon_patient_id,
                             date=int(date) if date else 0,
-                            baseline=1 if is_baseline else 0
+                            baseline=1 if baseline else 0
                         )
                         
                         result['imported_recordings'] += 1

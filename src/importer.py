@@ -26,7 +26,7 @@ class TBIHeadsetImporter:
         Initialize importer.
         
         Args:
-            eyecon_db_manager: PatientDataManager instance for target database
+            eyecon_db_manager: PatientDataManager instannz für Ziel DatenBank
         """
         self.db_manager = eyecon_db_manager
         self.temp_dir = None

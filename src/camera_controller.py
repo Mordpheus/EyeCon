@@ -1,17 +1,25 @@
 """
 Camera Controller für USB-Kameras und LED-Steuerung über Raspberry Pi
-Architektur:
-- USB-Kamera: Wird vom Pi als uvc-gadget exportiert, pyuvc erkennt sie
+
+Architektur (Option A - OpenCV):
+- USB-Kamera: Wird vom Pi als uvc-gadget exportiert, OpenCV erkennt sie
 - LED: Steuerung über Serial-Befehle an den Pi (raspi-gpio)
 - Video: Speichern lokal auf Windows PC
 - Kommunikation: Serial über COM-Port
+
+OpenCV nutzt Windows DirectShow API zur Kameradetektion.
+Kameras werden numerisch indiziert (0, 1, 2, ...).
+Nutzerinteraktion mit Live-Vorschau gewährleistet korrekte Auswahl.
 """
 
 import logging
 import serial
 import time
+import numpy as np
 from typing import Optional, List
 from pathlib import Path
+from PIL import Image
+import threading
 
 # Logging Setup
 logging.basicConfig(level=logging.INFO)
@@ -19,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 # Import mit Error-Handling für fehlende Libraries
 try:
-    from uvc import get_devices, Capture
-    HAS_UVC = True
+    import cv2
+    HAS_OPENCV = True
 except ImportError:
-    HAS_UVC = False
-    logger.warning("pyuvc nicht installiert. USB-Kamera-Funktionalität deaktiviert.")
+    HAS_OPENCV = False
+    logger.warning("OpenCV nicht installiert. USB-Kamera-Funktionalität deaktiviert.")
 
 try:
     import serial
@@ -38,7 +46,7 @@ class CameraController:
     Verwaltet USB-Kamera und LED-Steuerung über Raspberry Pi
     
     Architektur:
-    - Kamera: USB-Gerät (vom Pi als uvc-gadget exportiert)
+    - Kamera: USB-Gerät (vom Pi als uvc-gadget exportiert, OpenCV via DirectShow)
     - LED: Über Serial-Befehle zum Pi (raspi-gpio)
     - Videos: Lokal auf Windows PC speichern
     """
@@ -56,12 +64,17 @@ class CameraController:
         self.serial_connection = None
         
         # Kamera
-        self.current_camera = None
         self.capture = None
+        self.current_camera_index = None
         
         # Video-Aufnahme
         self.is_recording = False
         self.recording_file = None
+        self.video_writer = None
+        self.recording_frames = []  # Buffer für Frames während Aufnahme
+        self.recording_start_time = None  # Zeitstempel für 8-Sekunden-Zähler
+        self.stop_recording_requested = False  # Flag für manuelles Stoppen
+        self.manual_stop = False  # True wenn Benutzer Stop drückt, False wenn Auto-Stop nach 8s
         
         # Versuche Serial-Verbindung
         self._connect_serial()
@@ -92,26 +105,45 @@ class CameraController:
     
     def _send_serial_command(self, command: str) -> bool:
         """
-        Sende Befehl zum Pi über Serial
+        Sende Befehl zum Pi über Serial und warte auf Antwort
         
         Args:
-            command: Shell-Befehl (z.B. 'raspi-gpio set 18 op dh')
+            command: Shell-Befehl (z.B. 'pinctrl set 18 op dh')
         
         Returns:
-            True wenn erfolgreich gesendet
+            True wenn erfolgreich gesendet und Befehl ausgeführt
         """
         if not self.serial_connection:
             logger.warning("Keine Serial-Verbindung - Befehl nicht gesendet")
             return False
         
         try:
+            # Leere den Input- und Output-Buffer zuerst
+            self.serial_connection.reset_input_buffer()
+            self.serial_connection.reset_output_buffer()
+            
             # Sende Befehl mit Newline
             cmd_bytes = (command + '\n').encode('utf-8')
             self.serial_connection.write(cmd_bytes)
-            logger.debug(f"Befehl gesendet: {command}")
+            logger.info(f"Befehl gesendet: {command}")
             
-            # Warte auf kurze Verarbeitung
+            # Warte kurz auf Verarbeitung
             time.sleep(0.2)
+            
+            # Lese Antwort vom Pi (bis zu 1KB, max 500ms Timeout)
+            response = b''
+            timeout_counter = 0
+            while self.serial_connection.in_waiting > 0 and timeout_counter < 50:
+                response += self.serial_connection.read(1)
+                timeout_counter += 1
+                time.sleep(0.01)
+            
+            if response:
+                response_str = response.decode('utf-8', errors='ignore').strip()
+                # Kürze lange Antworten (z.B. Login-Banner)
+                if len(response_str) > 200:
+                    response_str = response_str[-200:]  # Nur letzte 200 Zeichen
+                logger.info(f"Pi-Antwort: {response_str}")
             
             return True
             
@@ -122,39 +154,49 @@ class CameraController:
     def list_cameras(self) -> List[str]:
         """
         Listet alle verfügbaren USB-Kameras auf
-        Die Kamera vom Pi sollte hier auftauchen als uvc-Gerät
+        Nutzt OpenCV mit DirectShow API unter Windows
         
         Returns:
-            List von Kamera-Geräten
+            List von Kamera-Beschreibungen
         """
-        if not HAS_UVC:
-            logger.warning("pyuvc nicht verfügbar - Kamera-Erkennung nicht möglich")
+        if not HAS_OPENCV:
+            logger.warning("OpenCV nicht verfügbar - Kamera-Erkennung nicht möglich")
             return []
         
-        try:
-            devices = get_devices()
-            camera_info = []
-            
-            for i, device in enumerate(devices):
-                # Versuche Namen zu extrahieren
-                try:
-                    name = device.name if hasattr(device, 'name') else str(device)
-                except:
-                    name = str(device)
+        camera_info = []
+        
+        # Versuche, bis zu 10 Kameras zu finden
+        for index in range(10):
+            try:
+                cap = cv2.VideoCapture(index)
                 
-                info = f"[{i}] {name}"
-                camera_info.append(info)
-                logger.info(f"Kamera gefunden: {info}")
-            
-            return camera_info if camera_info else []
-            
-        except Exception as e:
-            logger.error(f"Fehler beim Erkennen von Kameras: {e}")
-            return []
+                if cap.isOpened():
+                    # Lese eine Testframe um zu prüfen, ob Kamera funktioniert
+                    ret, frame = cap.read()
+                    
+                    if ret and frame is not None:
+                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                        fps = cap.get(cv2.CAP_PROP_FPS)
+                        
+                        info = f"[{index}] Kamera (Auflösung: {width}x{height}, FPS: {fps:.0f})"
+                        camera_info.append(info)
+                        logger.info(f"Kamera gefunden: {info}")
+                    
+                    cap.release()
+                else:
+                    # Keine weitere Kamera gefunden
+                    break
+                    
+            except Exception as e:
+                logger.debug(f"Index {index} ist keine gültige Kamera: {e}")
+                break
+        
+        return camera_info if camera_info else []
     
     def connect_camera(self, device_index: int = 0) -> bool:
         """
-        Verbindet zu einer USB-Kamera
+        Verbindet zu einer USB-Kamera über OpenCV
         
         Args:
             device_index: Index der Kamera (default: 0 = erste Kamera)
@@ -162,31 +204,34 @@ class CameraController:
         Returns:
             True wenn erfolgreich, False sonst
         """
-        if not HAS_UVC:
-            logger.error("pyuvc nicht verfügbar - Kann nicht zu Kamera verbinden")
+        if not HAS_OPENCV:
+            logger.error("OpenCV nicht verfügbar - Kann nicht zu Kamera verbinden")
             return False
         
         try:
-            devices = get_devices()
-            
-            if not devices:
-                logger.error("Keine USB-Kameras gefunden")
-                return False
-            
-            if device_index >= len(devices):
-                logger.error(f"Kamera-Index {device_index} außerhalb des Bereichs (max: {len(devices)-1})")
-                return False
-            
             # Bestehende Verbindung schließen
             if self.capture:
                 self.disconnect_camera()
             
             # Neue Verbindung
-            self.capture = Capture(devices[device_index])
-            self.current_camera = devices[device_index]
+            self.capture = cv2.VideoCapture(device_index)
             
-            logger.info(f"Verbunden zu Kamera: {self.current_camera}")
-            self.led_on()  # LED anschalten bei Verbindung
+            if not self.capture.isOpened():
+                logger.error(f"Konnte Kamera {device_index} nicht öffnen")
+                self.capture = None
+                return False
+            
+            self.current_camera_index = device_index
+            
+            # Setze Resolution und FPS für bessere Performance
+            self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+            self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+            self.capture.set(cv2.CAP_PROP_FPS, 30)
+            
+            logger.info(f"Verbunden zu Kamera: Index {device_index}")
+            
+            # LED anschalten bei Verbindung
+            self.led_on()
             
             return True
             
@@ -198,26 +243,34 @@ class CameraController:
         """Trennt Kameraverbindung"""
         if self.capture:
             try:
-                self.capture.close()
+                self.capture.release()
                 self.capture = None
                 logger.info("Kamera-Verbindung geschlossen")
             except Exception as e:
                 logger.error(f"Fehler beim Schließen der Kamera: {e}")
     
-    def get_frame(self):
+    def get_frame(self) -> Optional[Image.Image]:
         """
         Holt einen Video-Frame von der verbundenen Kamera
         
         Returns:
-            Frame-Objekt oder None bei Fehler
+            PIL Image (RGB format) oder None bei Fehler
         """
-        if not self.capture:
+        if not self.capture or not self.capture.isOpened():
             logger.debug("Keine Kamera verbunden")
             return None
         
         try:
-            frame = self.capture.get_frame()
-            return frame
+            ret, frame = self.capture.read()
+            
+            if ret and frame is not None:
+                # Konvertiere BGR zu RGB und dann zu PIL Image
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                pil_image = Image.fromarray(frame_rgb)
+                return pil_image
+            else:
+                logger.warning("Fehler beim Lesen des Frames")
+                return None
             
         except Exception as e:
             logger.error(f"Fehler beim Abrufen des Frames: {e}")
@@ -226,30 +279,30 @@ class CameraController:
     def led_on(self) -> bool:
         """
         Schaltet LED (GPIO 18) auf dem Pi ein
-        Befehl: raspi-gpio set 18 op dh (dh = digital high)
+        Befehl: pinctrl set 18 op dh (modernes pinctrl, ersetzt deprecated raspi-gpio)
         
         Returns:
             True wenn erfolgreich, False sonst
         """
-        return self._send_serial_command('raspi-gpio set 18 op dh')
+        return self._send_serial_command('pinctrl set 18 op dh')
     
     def led_off(self) -> bool:
         """
         Schaltet LED (GPIO 18) auf dem Pi aus
-        Befehl: raspi-gpio set 18 op dl (dl = digital low)
+        Befehl: pinctrl set 18 op dl (modernes pinctrl, ersetzt deprecated raspi-gpio)
         
         Returns:
             True wenn erfolgreich, False sonst
         """
-        return self._send_serial_command('raspi-gpio set 18 op dl')
+        return self._send_serial_command('pinctrl set 18 op dl')
     
     def start_recording(self, output_file: Optional[str] = None) -> bool:
         """
-        Startet Video-Aufnahme von der Kamera
+        Startet Video-Aufnahme von der Kamera (mit 8-Sekunden-Pupillometrie-Protokoll)
         Videos werden lokal auf Windows PC gespeichert
         
         Args:
-            output_file: Pfad zur Output-Datei (default: data/recordings/recording_<timestamp>.mp4)
+            output_file: Pfad zur Output-Datei (wird angefordert falls None - für Explorer-Dialog)
         
         Returns:
             True wenn erfolgreich, False sonst
@@ -263,21 +316,18 @@ class CameraController:
             return False
         
         try:
-            # Erzeuge Output-Datei wenn nicht angegeben
-            if not output_file:
-                recordings_dir = Path("data/recordings")
-                recordings_dir.mkdir(parents=True, exist_ok=True)
-                
-                timestamp = time.strftime("%Y-%m-%d-%H-%M-%S")
-                output_file = str(recordings_dir / f"recording_{timestamp}.mp4")
-            
-            self.recording_file = output_file
+            # Starte Recording im Hintergrund
+            self.recording_file = output_file if output_file else "pending"  # Wird später abgefragt
             self.is_recording = True
+            self.stop_recording_requested = False
+            self.manual_stop = False
+            self.recording_frames = []
+            self.recording_start_time = time.time()
             
-            logger.info(f"Aufnahme gestartet: {output_file}")
+            logger.info(f"Aufnahme gestartet (8-Sekunden-Protokoll)")
             
-            # TODO: Implementiere eigentliches Video-Recording mit OpenCV/pyuvc
-            # Für jetzt: Platzhalter
+            # Starten Sie die Recording-Schleife
+            self._recording_loop()
             
             return True
             
@@ -286,9 +336,239 @@ class CameraController:
             self.is_recording = False
             return False
     
+    def _recording_loop(self):
+        """
+        Interne Recording-Schleife (wird von start_recording() aufgerufen)
+        - 8 Sekunden Recording
+        - LED Stimulus bei 1.0-1.5s
+        - Speichern zu MP4 am Ende
+        """
+        DURATION = 8.0  # 8 Sekunden
+        LED_ON_DELAY = 1.0  # LED AN nach 1s
+        LED_ON_DURATION = 0.5  # LED bleibt 0.5s AN
+        
+        # Hole Frame-Rate und Auflösung
+        fps = int(self.capture.get(cv2.CAP_PROP_FPS)) or 30  # Default 30 FPS
+        width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        logger.info(f"Recording mit {fps}FPS, {width}x{height}px")
+        
+        # Starte Recording-Thread
+        recording_thread = threading.Thread(
+            target=self._recording_thread,
+            args=(DURATION, LED_ON_DELAY, LED_ON_DURATION, fps, width, height)
+        )
+        recording_thread.daemon = False
+        recording_thread.start()
+    
+    def _recording_thread(self, duration, led_on_delay, led_on_duration, fps, width, height):
+        """
+        Thread für Video-Recording mit LED-Stimulus
+        """
+        try:
+            frame_count = 0
+            start_time = time.time()
+            led_activated = False
+            
+            # LED aus am Start
+            self.led_off()
+            
+            while (time.time() - start_time) < duration and not self.stop_recording_requested:
+                elapsed = time.time() - start_time
+                
+                # LED-Stimulus bei 1.0-1.5s
+                if led_on_delay <= elapsed < (led_on_delay + led_on_duration):
+                    if not led_activated:
+                        self.led_on()
+                        led_activated = True
+                        logger.info(f"LED AN bei {elapsed:.2f}s")
+                elif led_activated and elapsed >= (led_on_delay + led_on_duration):
+                    self.led_off()
+                    led_activated = False
+                    logger.info(f"LED AUS bei {elapsed:.2f}s")
+                
+                # Capture Frame
+                ret, frame = self.capture.read()
+                if ret and frame is not None:
+                    # Speichere Frame im RGB-Format (nicht BGR)
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.recording_frames.append((frame_rgb, elapsed))
+                    frame_count += 1
+                    
+                    # Logging alle 1s
+                    if frame_count % (fps or 30) == 0:
+                        logger.debug(f"Recording: {elapsed:.1f}s, {frame_count} frames")
+                else:
+                    logger.warning("Frame capture fehlgeschlagen")
+                    time.sleep(0.01)  # Kurze Pause um CPU zu entlasten
+            
+            # LED am Ende ausschalten
+            self.led_off()
+            
+            # Speichern Sie die aufgezeichneten Frames
+            if self.stop_recording_requested:
+                # Manuell gestoppt - wird vom UI-Dialog behandelt
+                self.manual_stop = True
+                logger.info(f"Recording manuell gestoppt nach {elapsed:.2f}s")
+            else:
+                # Auto-Stop nach 8s - speichern
+                self.manual_stop = False
+                logger.info(f"Recording Auto-Stop nach {elapsed:.2f}s - speichere {len(self.recording_frames)} frames")
+                self._save_recording_to_file()
+            
+            self.is_recording = False
+            
+        except Exception as e:
+            logger.error(f"Fehler in Recording-Thread: {e}")
+            self.is_recording = False
+            self.led_off()
+    
+    def _save_recording_to_file(self, output_file: Optional[str] = None) -> Optional[str]:
+        """
+        Speichert aufgezeichnete Frames zu MP4-Datei
+        
+        Args:
+            output_file: Zieldatei (wenn None, wird automatisch generiert)
+            
+        Returns:
+            Pfad zur gespeicherten Datei oder None bei Fehler
+        """
+        if not self.recording_frames:
+            logger.error("Keine Frames zum Speichern vorhanden")
+            return None
+        
+        try:
+            # Erzeuge Output-Datei wenn nicht angegeben
+            if not output_file or output_file == "pending":
+                recordings_dir = Path("data/recordings")
+                recordings_dir.mkdir(parents=True, exist_ok=True)
+                
+                timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+                output_file = str(recordings_dir / f"recording_{timestamp}.mp4")
+            
+            # Hole erste Frame für Dimensionen
+            first_frame = self.recording_frames[0][0]
+            height, width = first_frame.shape[:2]
+            
+            # Definiere Codec und VideoWriter
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            fps = 20  # Recording-FPS (standardisiert)
+            out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
+            
+            if not out.isOpened():
+                logger.error(f"VideoWriter konnte nicht geöffnet werden: {output_file}")
+                return None
+            
+            # Schreibe Frames
+            for frame_rgb, elapsed in self.recording_frames:
+                # Konvertiere RGB zurück zu BGR für OpenCV
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                out.write(frame_bgr)
+            
+            out.release()
+            
+            file_size_mb = Path(output_file).stat().st_size / (1024 * 1024)
+            logger.info(f"Recording gespeichert: {output_file} ({file_size_mb:.2f}MB, {len(self.recording_frames)} frames)")
+            
+            self.recording_file = output_file
+            self.recording_frames = []  # Leere den Buffer
+            
+            return output_file
+            
+        except Exception as e:
+            logger.error(f"Fehler beim Speichern der Aufnahme: {e}")
+            return None
+    
+    def start_recording_with_pupillometry(self, duration: float = 8.0, 
+                                         led_on_delay: float = 1.0,
+                                         output_video: Optional[str] = None) -> Optional[str]:
+        """
+        Startet Recording mit 8-Sekunden Pupillometrie-Protokoll
+        
+        Args:
+            duration: Aufnahmedauer in Sekunden (default: 8.0)
+            led_on_delay: Verzögerung bis LED AN in Sekunden (default: 1.0)
+            output_video: Output MP4 Datei (wenn None, wird automatisch generiert)
+            
+        Returns:
+            Pfad zur gespeicherten Datei oder None bei Fehler
+        """
+        if not self.capture:
+            logger.error("Keine Kamera verbunden")
+            return None
+        
+        if self.is_recording:
+            logger.warning("Aufnahme läuft bereits")
+            return None
+        
+        try:
+            self.is_recording = True
+            self.stop_recording_requested = False
+            self.manual_stop = False
+            self.recording_frames = []
+            self.recording_start_time = time.time()
+            
+            # Hole Frame-Rate und Auflösung
+            fps = int(self.capture.get(cv2.CAP_PROP_FPS)) or 30
+            width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            
+            logger.info(f"Starte Pupillometrie-Recording: {duration}s mit LED-Stimulus bei {led_on_delay}s")
+            
+            # Recording-Schleife
+            LED_ON_DURATION = 0.5
+            frame_count = 0
+            start_time = time.time()
+            led_activated = False
+            
+            # LED aus am Start
+            self.led_off()
+            
+            while (time.time() - start_time) < duration and not self.stop_recording_requested:
+                elapsed = time.time() - start_time
+                
+                # LED-Stimulus
+                if led_on_delay <= elapsed < (led_on_delay + LED_ON_DURATION):
+                    if not led_activated:
+                        self.led_on()
+                        led_activated = True
+                        logger.info(f"LED AN bei {elapsed:.2f}s")
+                elif led_activated and elapsed >= (led_on_delay + LED_ON_DURATION):
+                    self.led_off()
+                    led_activated = False
+                    logger.info(f"LED AUS bei {elapsed:.2f}s")
+                
+                # Capture Frame
+                ret, frame = self.capture.read()
+                if ret and frame is not None:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.recording_frames.append((frame_rgb, elapsed))
+                    frame_count += 1
+                else:
+                    time.sleep(0.01)
+            
+            # LED am Ende ausschalten
+            self.led_off()
+            
+            # Bestimme ob manuell oder auto gestoppt wurde
+            if self.stop_recording_requested:
+                self.manual_stop = True
+                self.is_recording = False
+                return None  # Wird vom UI behandelt
+            else:
+                # Auto-Stop - speichern
+                return self._save_recording_to_file(output_video)
+        
+        except Exception as e:
+            logger.error(f"Fehler in Pupillometrie-Recording: {e}")
+            self.is_recording = False
+            self.led_off()
+            return None
+    
     def stop_recording(self) -> bool:
         """
-        Stoppt Video-Aufnahme
+        Stoppt Video-Aufnahme (manuelles Stop vom Benutzer)
         
         Returns:
             True wenn erfolgreich, False sonst
@@ -298,16 +578,77 @@ class CameraController:
             return False
         
         try:
-            self.is_recording = False
-            logger.info(f"Aufnahme gestoppt: {self.recording_file}")
+            self.stop_recording_requested = True
+            self.manual_stop = True
+            logger.info("Recording Stop-Anfrage gestellt")
             
-            # TODO: Implementiere Speichern und Finalisieren der Datei
+            # Gebe dem Thread Zeit zum Stoppen (max 1s)
+            elapsed = 0
+            while self.is_recording and elapsed < 1.0:
+                time.sleep(0.01)
+                elapsed += 0.01
             
             return True
             
         except Exception as e:
             logger.error(f"Fehler beim Stoppen der Aufnahme: {e}")
+            self.is_recording = False
             return False
+    
+    def get_recorded_duration(self) -> float:
+        """
+        Gibt die bisherige Recording-Dauer in Sekunden zurück
+        
+        Returns:
+            Dauer in Sekunden, oder 0 wenn nicht aufnehmend
+        """
+        if not self.is_recording or not self.recording_frames:
+            return 0.0
+        
+        if not self.recording_frames:
+            return 0.0
+        
+        # Die letzte Frame hat die aktuelle Elapsed-Zeit
+        return self.recording_frames[-1][1]
+    
+    def get_recorded_frame_count(self) -> int:
+        """
+        Gibt die Anzahl aufgezeichneter Frames zurück
+        
+        Returns:
+            Anzahl der Frames
+        """
+        return len(self.recording_frames)
+    
+    def delete_temp_recording(self) -> bool:
+        """
+        Löscht temporäre aufgezeichnete Frames
+        (Wird aufgerufen wenn Benutzer Löschen auswählt)
+        
+        Returns:
+            True wenn erfolgreich, False sonst
+        """
+        try:
+            self.recording_frames = []
+            self.recording_file = None
+            self.is_recording = False
+            logger.info("Temporäre Recording gelöscht")
+            return True
+        except Exception as e:
+            logger.error(f"Fehler beim Löschen der Recording: {e}")
+            return False
+    
+    def save_manual_recording(self, output_file: str) -> Optional[str]:
+        """
+        Speichert manuell gestoppte Recording in angegebene Datei
+        
+        Args:
+            output_file: Zieldatei
+            
+        Returns:
+            Pfad zur gespeicherten Datei oder None bei Fehler
+        """
+        return self._save_recording_to_file(output_file)
     
     def get_status(self) -> dict:
         """
@@ -320,11 +661,11 @@ class CameraController:
             'serial_connected': self.serial_connection is not None,
             'com_port': self.com_port,
             'camera_connected': self.capture is not None,
-            'current_camera': str(self.current_camera) if self.current_camera else None,
+            'current_camera': str(self.current_camera_index) if self.current_camera_index is not None else None,
             'is_recording': self.is_recording,
             'recording_file': self.recording_file,
             'cameras_available': len(self.list_cameras()),
-            'has_uvc': HAS_UVC,
+            'has_opencv': HAS_OPENCV,
             'has_serial': HAS_SERIAL
         }
     

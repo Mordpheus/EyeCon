@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 data/eyecon.db
@@ -10,3 +11,6 @@ EyeCon/
 
 # Dokumentation (lokal nur)
 TODO.md
+Fixes_und_Ideen.tex
+KAMERA_TEST_BERICHT.md
+RaspPI_tests.md

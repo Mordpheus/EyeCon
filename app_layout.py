@@ -1,10 +1,11 @@
 from pathlib import Path
 from datetime import datetime
+import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider, QFileDialog
 )
-from PySide6.QtCore import Qt, Signal, QUrl
-from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QThread
+from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent, QPixmap, QImage
 from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -12,6 +13,38 @@ from matplotlib.figure import Figure
 from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog
 from data_manager import PatientDataManager
 from src.importer import TBIHeadsetImporter
+from src.camera_controller import CameraController
+
+
+# -------------------------------------------------
+# RECORDING WORKER THREAD
+# -------------------------------------------------
+class RecordingWorker(QThread):
+    """Worker Thread für Non-Blocking Recording"""
+    recording_finished = Signal(str)  # Emits: "success:<filepath>" oder "manual_stop"
+    recording_progress = Signal(float, int)  # Emits: (elapsed_time, frame_count)
+    
+    def __init__(self, camera_controller):
+        super().__init__()
+        self.camera_controller = camera_controller
+    
+    def run(self):
+        """
+        Führt 8-Sekunden-Recording in separatem Thread aus
+        """
+        result = self.camera_controller.start_recording_with_pupillometry(
+            duration=8.0,
+            led_on_delay=1.0,
+            output_video=None  # Wird automatisch generiert
+        )
+        
+        # Überprüfe ob manuell gestoppt wurde
+        if self.camera_controller.manual_stop:
+            self.recording_finished.emit("manual_stop")
+        elif result:
+            self.recording_finished.emit(f"success:{result}")
+        else:
+            self.recording_finished.emit("error")
 
 
 # -------------------------------------------------
@@ -272,10 +305,14 @@ class RecordingPlayerScreen(QWidget):
     
     back_clicked = Signal()  # Signal emitted when back button clicked
     
-    def __init__(self):
+    def __init__(self, camera_controller: CameraController = None):
         super().__init__()
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background-color: #1a1a1a;")
+        
+        # Use provided camera controller or create new one
+        self.camera_controller = camera_controller if camera_controller else CameraController()
+        self.is_recording = False
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -353,9 +390,9 @@ class RecordingPlayerScreen(QWidget):
         # === Playback Controls ===
         controls_layout = QHBoxLayout()
         
-        self.play_btn = QPushButton("▶ Play")
+        self.play_btn = QPushButton("▶ Abspielen")
         self.pause_btn = QPushButton("⏸ Pause")
-        self.stop_btn = QPushButton("⏹ Stop")
+        self.stop_btn = QPushButton("⏹ Stopp")
         
         self.play_btn.clicked.connect(self.media_player.play)
         self.pause_btn.clicked.connect(self.media_player.pause)
@@ -364,6 +401,34 @@ class RecordingPlayerScreen(QWidget):
         controls_layout.addWidget(self.play_btn)
         controls_layout.addWidget(self.pause_btn)
         controls_layout.addWidget(self.stop_btn)
+        
+        # === Aufnahmekontrolle ===
+        controls_layout.addSpacing(20)
+        
+        self.start_recording_btn = QPushButton("🔴 REC STARTEN")
+        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.start_recording_btn.clicked.connect(self._on_start_recording)
+        controls_layout.addWidget(self.start_recording_btn)
+        
+        self.stop_recording_btn = QPushButton("⏹ REC STOPP")
+        self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
+        self.stop_recording_btn.setEnabled(False)
+        self.stop_recording_btn.clicked.connect(self._on_stop_recording)
+        controls_layout.addWidget(self.stop_recording_btn)
+        
+        # === LED Teststeuerung ===
+        controls_layout.addSpacing(20)
+        
+        self.led_on_btn = QPushButton("💡 LED AN")
+        self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white;")
+        self.led_on_btn.clicked.connect(self._on_led_on)
+        controls_layout.addWidget(self.led_on_btn)
+        
+        self.led_off_btn = QPushButton("💡 LED AUS")
+        self.led_off_btn.setStyleSheet("background-color: #444444; color: white;")
+        self.led_off_btn.clicked.connect(self._on_led_off)
+        controls_layout.addWidget(self.led_off_btn)
+        
         controls_layout.addStretch()
         
         layout.addLayout(controls_layout)
@@ -578,6 +643,198 @@ class RecordingPlayerScreen(QWidget):
         else:
             self.duration_label.setText("--:--")
     
+    def _on_start_recording(self):
+        """Start recording video from camera (8-second Pupillometry Protocol)."""
+        if not self.camera_controller.capture:
+            self.recording_info.setText("✗ Fehler: Keine Kamera verbunden!")
+            return
+        
+        if self.is_recording:
+            self.recording_info.setText("✗ Fehler: Recording läuft bereits!")
+            return
+        
+        try:
+            # Deaktiviere Start-Button
+            self.is_recording = True
+            self.start_recording_btn.setEnabled(False)
+            self.start_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
+            self.stop_recording_btn.setEnabled(True)
+            self.stop_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+            
+            # Starte Recording in separatem Thread
+            self.recording_worker = RecordingWorker(self.camera_controller)
+            self.recording_worker.recording_finished.connect(self._on_recording_finished)
+            self.recording_worker.start()
+            
+            self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus bei 1.0-1.5s)")
+            
+        except Exception as e:
+            self.recording_info.setText(f"✗ Fehler beim Starten der Aufnahme: {str(e)}")
+            self.is_recording = False
+            self.start_recording_btn.setEnabled(True)
+            self.stop_recording_btn.setEnabled(False)
+    
+    def _on_stop_recording(self):
+        """Stop recording video (vor 8 Sekunden = Dialog erforderlich)."""
+        if not self.is_recording:
+            self.recording_info.setText("✗ Keine Aufnahme aktiv!")
+            return
+        
+        try:
+            # Stoppe Recording
+            self.camera_controller.stop_recording()
+            
+            # Warte kurz, bis Thread anhält
+            if hasattr(self, 'recording_worker') and self.recording_worker.isRunning():
+                self.recording_worker.wait(1000)  # Max 1 Sekunde warten
+            
+            # Überprüfe wie lange aufgenommen wurde
+            elapsed = self.camera_controller.get_recorded_duration()
+            frame_count = self.camera_controller.get_recorded_frame_count()
+            
+            self.recording_info.setText(
+                f"⏸ Recording gestoppt nach {elapsed:.1f}s ({frame_count} frames)"
+            )
+            
+            # Nur kurz aufgenommen (<8s) = Dialog anzeigen
+            if elapsed < 8.0:
+                self._show_incomplete_recording_dialog(elapsed, frame_count)
+            else:
+                # 8s oder mehr = Datei speichern wie normal
+                self._complete_recording()
+        
+        except Exception as e:
+            self.recording_info.setText(f"✗ Fehler beim Stoppen: {str(e)}")
+    
+    def _show_incomplete_recording_dialog(self, elapsed: float, frame_count: int):
+        """
+        Zeigt Dialog für unvollständiges Recording (<8s)
+        - Ja: Speichern mit Explorer-Dialog
+        - Nein: Datei löschen
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Unvollständiges Recording")
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText(
+            f"Recording ist nur {elapsed:.1f} Sekunden lang.\n\n"
+            f"Das Protokoll erfordert 8 Sekunden für gültige Messungen.\n\n"
+            f"Möchten Sie diese Datei speichern oder verwerfen?"
+        )
+        msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg_box.setDefaultButton(QMessageBox.No)
+        
+        yes_btn = msg_box.button(QMessageBox.Yes)
+        no_btn = msg_box.button(QMessageBox.No)
+        yes_btn.setText("💾 Speichern")
+        no_btn.setText("🗑️ Verwerfen")
+        
+        result = msg_box.exec()
+        
+        if result == QMessageBox.Yes:
+            # Benutzer möchte speichern - öffne File-Dialog
+            self._show_save_dialog()
+        else:
+            # Benutzer möchte löschen
+            self.camera_controller.delete_temp_recording()
+            self.recording_info.setText("🗑️ Recording gelöscht")
+        
+        # Reset Button-Zustände
+        self.is_recording = False
+        self.start_recording_btn.setEnabled(True)
+        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.stop_recording_btn.setEnabled(False)
+        self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
+    
+    def _show_save_dialog(self):
+        """
+        Öffnet Explorer-Dialog zum Speichern der Datei mit benutzerdefinniertem Namen
+        """
+        try:
+            # Standard-Pfad: data/recordings/
+            default_dir = str(Path("data/recordings").resolve())
+            Path(default_dir).mkdir(parents=True, exist_ok=True)
+            
+            # Öffne File-Save-Dialog
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Recording speichern unter",
+                default_dir,
+                "MP4 Video (*.mp4);;Alle Dateien (*.*)"
+            )
+            
+            if file_path:
+                # Speichere Recording mit benutzerdefinniertem Namen
+                result = self.camera_controller.save_manual_recording(file_path)
+                
+                if result:
+                    self.recording_info.setText(f"✓ Recording gespeichert:\n{result}")
+                else:
+                    self.recording_info.setText("✗ Fehler beim Speichern der Datei!")
+            else:
+                # Benutzer hat Abbrechen geklickt - Datei löschen
+                self.camera_controller.delete_temp_recording()
+                self.recording_info.setText("🗑️ Recording verworfen")
+        
+        except Exception as e:
+            self.recording_info.setText(f"✗ Fehler: {str(e)}")
+    
+    def _complete_recording(self):
+        """
+        Wird aufgerufen wenn Recording 8s lang läuft und automatisch speichert
+        """
+        try:
+            # Datei sollte bereits gespeichert sein
+            if self.camera_controller.recording_file:
+                file_size_mb = Path(self.camera_controller.recording_file).stat().st_size / (1024 * 1024)
+                self.recording_info.setText(
+                    f"✓ Recording erfolgreich gespeichert:\n"
+                    f"{Path(self.camera_controller.recording_file).name} ({file_size_mb:.2f}MB)"
+                )
+            else:
+                self.recording_info.setText("✗ Recording-Datei nicht gefunden!")
+        except Exception as e:
+            self.recording_info.setText(f"✗ Fehler: {str(e)}")
+        
+        # Reset Button-Zustände
+        self.is_recording = False
+        self.start_recording_btn.setEnabled(True)
+        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.stop_recording_btn.setEnabled(False)
+        self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
+    
+    def _on_recording_finished(self, result: str):
+        """
+        Wird aufgerufen wenn Recording-Thread fertig ist
+        result: "success:<filepath>" oder "manual_stop" oder "error"
+        """
+        if result.startswith("success:"):
+            filepath = result.split(":", 1)[1]
+            self._complete_recording()
+        elif result == "manual_stop":
+            # Wird bereits in _on_stop_recording() behandelt
+            pass
+        else:  # "error"
+            self.recording_info.setText("✗ Fehler beim Recording!")
+            self.is_recording = False
+            self.start_recording_btn.setEnabled(True)
+            self.stop_recording_btn.setEnabled(False)
+    
+    def _on_led_on(self):
+        """LED über Raspberry Pi anschalten."""
+        if self.camera_controller.led_on():
+            self.led_on_btn.setStyleSheet("background-color: #ffdd44; color: black; font-weight: bold;")
+            self.details_label.setText("💡 LED: AN")
+        else:
+            self.details_label.setText("✗ LED-Fehler: LED konnte nicht angeschaltet werden. Serial-Verbindung prüfen.")
+    
+    def _on_led_off(self):
+        """LED über Raspberry Pi ausschalten."""
+        if self.camera_controller.led_off():
+            self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white;")
+            self.details_label.setText("💡 LED: AUS")
+        else:
+            self.details_label.setText("✗ LED-Fehler: LED konnte nicht ausgeschaltet werden. Serial-Verbindung prüfen.")
+    
     def on_timeline_moved(self, value: int) -> None:
         """Handle user scrubbing on timeline slider."""
         if self.media_player.duration() > 0:
@@ -641,30 +898,46 @@ class SettingsScreen(QWidget):
     
     back_clicked = Signal()
     
-    def __init__(self):
+    def __init__(self, camera_controller: CameraController = None):
         super().__init__()
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("background-color: white;")
+        
+        # Use provided camera controller or create new one
+        self.camera_controller = camera_controller if camera_controller else CameraController()
+        
+        # Timer für Live-Camera-Feed
+        self.camera_timer = QTimer()
+        self.camera_timer.timeout.connect(self._update_camera_preview)
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         
         # Title
-        title = QLabel("Settings")
+        title = QLabel("Settings - Camera & LED Control")
         title.setStyleSheet("color: black; font-weight: bold; font-size: 16px;")
         layout.addWidget(title)
         
-        # USB Port Selection Section
+        # === STATUS SECTION ===
+        status_label = QLabel("Connection Status")
+        status_label.setStyleSheet("color: black; font-weight: bold; font-size: 13px;")
+        layout.addWidget(status_label)
+        
+        self.status_text = QLabel()
+        self.status_text.setStyleSheet("color: #333333; font-size: 11px; background-color: #f0f0f0; padding: 10px; border-radius: 3px;")
+        self._update_status_display()
+        layout.addWidget(self.status_text)
+        
+        # === USB PORT SECTION ===
         usb_label = QLabel("Camera USB Port")
         usb_label.setStyleSheet("color: black; font-weight: bold; font-size: 13px;")
         layout.addWidget(usb_label)
         
-        # USB Port Dropdown + Camera Preview Layout
         usb_container_layout = QHBoxLayout()
         usb_container_layout.setSpacing(20)
         
-        # Left side: Dropdown and Scan button
+        # Left side: Dropdown and Buttons
         usb_layout = QVBoxLayout()
         usb_layout.setSpacing(10)
         
@@ -698,13 +971,35 @@ class SettingsScreen(QWidget):
         self.port_dropdown.currentIndexChanged.connect(self._on_port_changed)
         port_row.addWidget(self.port_dropdown)
         
-        # Refresh button
-        refresh_btn = QPushButton("🔄 Scan Ports")
-        refresh_btn.setMaximumWidth(120)
-        refresh_btn.clicked.connect(self._on_refresh_ports)
-        port_row.addWidget(refresh_btn)
+        # Scan Ports button
+        scan_btn = QPushButton("🔄 Scan Ports")
+        scan_btn.setMaximumWidth(120)
+        scan_btn.clicked.connect(self._on_scan_ports)
+        port_row.addWidget(scan_btn)
         
         usb_layout.addLayout(port_row)
+        
+        # LED Test Controls
+        led_row = QHBoxLayout()
+        led_label = QLabel("LED Control:")
+        led_label.setStyleSheet("color: black;")
+        led_row.addWidget(led_label)
+        
+        self.led_on_btn = QPushButton("💡 LED ON")
+        self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white; padding: 5px;")
+        self.led_on_btn.setMaximumWidth(100)
+        self.led_on_btn.clicked.connect(self._on_led_on)
+        led_row.addWidget(self.led_on_btn)
+        
+        self.led_off_btn = QPushButton("💡 LED OFF")
+        self.led_off_btn.setStyleSheet("background-color: #444444; color: white; padding: 5px;")
+        self.led_off_btn.setMaximumWidth(100)
+        self.led_off_btn.clicked.connect(self._on_led_off)
+        led_row.addWidget(self.led_off_btn)
+        
+        led_row.addStretch()
+        usb_layout.addLayout(led_row)
+        
         usb_container_layout.addLayout(usb_layout, 1)
         
         # Right side: Camera Preview (150x150)
@@ -739,9 +1034,11 @@ class SettingsScreen(QWidget):
         # Info text
         info = QLabel(
             "Camera Configuration:\n\n"
-            "Select the USB port where your eye-tracking camera is connected. "
-            "Use the 'Scan Ports' button to auto-detect available devices.\n\n"
-            "More camera settings will be available in future versions."
+            "• Serial connection to Raspberry Pi at COM3\n"
+            "• USB camera is auto-detected (uvc-gadget)\n"
+            "• LED control: GPIO 18 (raspi-gpio)\n"
+            "• Use 'Scan Ports' to detect connected devices\n"
+            "• Videos are saved locally on Windows PC"
         )
         info.setStyleSheet("color: #666666; font-size: 11px;")
         info.setWordWrap(True)
@@ -755,9 +1052,21 @@ class SettingsScreen(QWidget):
         back_btn.clicked.connect(self.back_clicked.emit)
         layout.addWidget(back_btn)
     
+    def _update_status_display(self):
+        """Update status text with current camera controller state."""
+        status = self.camera_controller.get_status()
+        
+        text = "Status:\n"
+        text += f"  Serial: {'✓ Connected' if status['serial_connected'] else '❌ Disconnected'}\n"
+        text += f"  Port: {status['com_port']}\n"
+        text += f"  Cameras: {status['cameras_available']} found\n"
+        text += f"  Recording: {'🔴 Active' if status['is_recording'] else '⏹ Stopped'}"
+        
+        self.status_text.setText(text)
+    
     def _show_no_signal(self):
         """Show 'No Signal' message with disconnected icon in preview."""
-        self.camera_preview.setText("⊘\n\nKein Signal")
+        self.camera_preview.setText("⊘\n\nNo Signal")
         self.camera_preview.setStyleSheet("""
             QLabel {
                 background-color: #f5f5f5;
@@ -784,6 +1093,83 @@ class SettingsScreen(QWidget):
         """)
         # TODO: Hier würde OpenCV Camera-Feed angezeigt
     
+    def _update_camera_preview(self):
+        """Update camera preview with live frame from USB-Webcam."""
+        frame = self.camera_controller.get_frame()
+        
+        if frame is None:
+            return
+        
+        try:
+            # Frame ist ein PIL Image von USB-Webcam
+            # Konvertiere zu QPixmap
+            from io import BytesIO
+            
+            # PIL Image zu QPixmap (PPM Format für Qt)
+            import io
+            buffer = BytesIO()
+            frame.save(buffer, format="PPM")
+            buffer.seek(0)
+            
+            # Erstelle QPixmap aus Image-Daten
+            pixmap = QPixmap()
+            pixmap.loadFromData(buffer.getvalue(), "PPM")
+            
+            # Skaliere auf Preview-Größe (150x150)
+            scaled_pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)
+            
+            # Zeige im Label
+            self.camera_preview.setPixmap(scaled_pixmap)
+            self.camera_preview.setAlignment(Qt.AlignCenter)
+            
+        except Exception as e:
+            print(f"Fehler beim Update Camera Preview: {e}")
+    
+    def _on_port_changed(self):
+        """Handle port dropdown change."""
+        self._update_status_display()
+    
+    def _on_scan_ports(self):
+        """Scan and detect available USB cameras."""
+        cameras = self.camera_controller.list_cameras()
+        if cameras:
+            # Versuche, zur ersten Kamera zu verbinden
+            if self.camera_controller.connect_camera(0):
+                self._show_connected("USB Camera")
+                # Starte Live-Feed Timer (30 FPS = 33ms)
+                self.camera_timer.start(33)
+                self.status_text.setText(f"✓ Kamera verbunden: {len(cameras)} Gerät(e) gefunden")
+                print(f"Kamera verbunden! Live-Feed läuft...")
+            else:
+                self.status_text.setText("✗ Fehler: Konnte nicht zur Kamera verbinden")
+                self._show_no_signal()
+        else:
+            self.status_text.setText("✗ Keine USB-Kameras gefunden")
+            self._show_no_signal()
+        
+        self._update_status_display()
+    
+    def _on_led_on(self):
+        """Turn LED on."""
+        if self.camera_controller.led_on():
+            self.led_on_btn.setStyleSheet("background-color: #ffdd44; color: black; font-weight: bold; padding: 5px;")
+            self.status_text.setText("✓ LED: ON (GPIO 18 activated)")
+            print("LED turned ON successfully")
+        else:
+            self.status_text.setText("✗ LED Error: Failed to turn LED on. Check serial connection.")
+            print("Failed to turn LED on")
+        self._update_status_display()
+    
+    def _on_led_off(self):
+        """Turn LED off."""
+        if self.camera_controller.led_off():
+            self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white; padding: 5px;")
+            self.status_text.setText("✓ LED: OFF (GPIO 18 deactivated)")
+            print("LED turned OFF successfully")
+        else:
+            self.status_text.setText("✗ LED Error: Failed to turn LED off. Check serial connection.")
+            print("Failed to turn LED off")
+        self._update_status_display()
     def _on_port_changed(self, index: int):
         """Handle USB port selection change."""
         if index <= 0:
@@ -796,21 +1182,19 @@ class SettingsScreen(QWidget):
             self._show_connected(port)
         else:
             self._show_no_signal()
-    
-    def _on_refresh_ports(self):
-        """Refresh available COM ports (placeholder)."""
-        # TODO: Implement actual COM port detection using pyserial
-        pass
 
 
 # -------------------------------------------------
 # CENTER AREA - Main content
 # -------------------------------------------------
 class CenterArea(QWidget):
-    def __init__(self):
+    def __init__(self, camera_controller: CameraController = None):
         super().__init__()
         # Ensure stylesheets render background
         self.setAttribute(Qt.WA_StyledBackground, True)
+
+        # Shared camera controller
+        self.camera_controller = camera_controller
 
         # Data manager and selection state
         self.manager = PatientDataManager(Path("data/eyecon.db"))
@@ -843,16 +1227,16 @@ class CenterArea(QWidget):
         self.patient_list = PatientListWidget()
         self.stacked_widget.addWidget(self.patient_list)
         
-        # Screen 1: Recording Player
-        self.recording_player = RecordingPlayerScreen()
+        # Screen 1: Recording Player - Pass camera controller
+        self.recording_player = RecordingPlayerScreen(camera_controller=self.camera_controller)
         self.stacked_widget.addWidget(self.recording_player)
         
         # Screen 2: Help
         self.help_screen = HelpScreen()
         self.stacked_widget.addWidget(self.help_screen)
         
-        # Screen 3: Settings
-        self.settings_screen = SettingsScreen()
+        # Screen 3: Settings - Pass camera controller
+        self.settings_screen = SettingsScreen(camera_controller=self.camera_controller)
         self.stacked_widget.addWidget(self.settings_screen)
         
         # Show patient list by default
@@ -1043,17 +1427,21 @@ class RightArea(QWidget):
 # -------------------------------------------------
 class AppLayout(QWidget):
     # Pure layout framework: Left - Center - Right
-    # No logic, no screens
+    # Shared resources (CameraController)
 
     def __init__(self):
         super().__init__()
+
+        # === Shared Resources ===
+        # Create CameraController once, share with all screens
+        self.camera_controller = CameraController()
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.left = LeftArea()
-        self.center = CenterArea()
+        self.center = CenterArea(camera_controller=self.camera_controller)
         self.right = RightArea()
 
         layout.addWidget(self.left)

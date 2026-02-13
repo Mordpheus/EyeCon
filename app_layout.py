@@ -189,13 +189,13 @@ class LeftArea(QWidget):
 
         self.setFixedWidth(220)
 
-    def set_selected_patient(self, patient_name: str, patient_id: int = None) -> None:
+    def set_selected_patient(self, patient_name: str, patient_id: str = None) -> None:
         """
         Update patient name display and load recordings for selected patient.
         
         Parameters:
-            patient_name (str): Full name of the patient (first + last)
-            patient_id (int): Database ID of the selected patient
+            patient_name (str): Patient ID in format XXXX-YYYY-MM-DD-G
+            patient_id (str): Database ID (TEXT) of the selected patient
                 Passed from CenterArea to load recordings
         """
         # Update patient name display with highlighted styling
@@ -216,7 +216,7 @@ class LeftArea(QWidget):
         if patient_id is not None:
             self._load_recordings_for_patient(patient_id)
     
-    def _load_recordings_for_patient(self, patient_id: int) -> None:
+    def _load_recordings_for_patient(self, patient_id: str) -> None:
         """
         Signal handler placeholder for loading recordings.
         
@@ -225,7 +225,7 @@ class LeftArea(QWidget):
         which has access to CenterArea.manager
         
         Parameters:
-            patient_id (int): Database ID of the patient
+            patient_id (str): Database ID (TEXT) of the patient
         """
         # Placeholder - implementation in AppLayout
         pass
@@ -1198,7 +1198,7 @@ class CenterArea(QWidget):
 
         # Data manager and selection state
         self.manager = PatientDataManager(Path("data/eyecon.db"))
-        self.selected_patient_id = None
+        self.selected_patient_id: str | None = None
         
         # Initialize TBI_Headset importer for ZIP imports
         self.importer = TBIHeadsetImporter(self.manager)

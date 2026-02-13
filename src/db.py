@@ -310,7 +310,7 @@ class PatientDataManager:
                             existing_patient = self.get_patient(calculated_id)
                             
                             if on_duplicate_callback:
-                                decision = on_duplicate_callback(calculated_id, patient_dict)
+                                decision = on_duplicate_callback(existing_patient, patient_dict)
                             else:
                                 # Default: skip if no callback provided
                                 decision = 'skip'

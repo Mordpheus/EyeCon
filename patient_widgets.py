@@ -3,45 +3,40 @@ Patient-spezifische UI-Widgets für das Dashboard
 Iteration 2: UI-Komponenten
 
 Dependencies:
-- PySide6.QtWidgets: QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, QLineEdit, QMessageBox, QLabel, QHBoxLayout
-- PySide6.QtCore: Qt, Signal
+- PySide6.QtWidgets: QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, QLineEdit, QMessageBox, QLabel, QHBoxLayout, QDateEdit, QComboBox, QGroupBox
+- PySide6.QtCore: Qt, Signal, QDate
 - PySide6.QtGui: QFont, QColor
 """
 from PySide6.QtWidgets import (
     QPushButton, QWidget, QVBoxLayout, QScrollArea, QDialog, 
-    QLineEdit, QMessageBox, QLabel, QHBoxLayout
+    QLineEdit, QMessageBox, QLabel, QHBoxLayout, QDateEdit, QComboBox, QGroupBox
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QDate
 from PySide6.QtGui import QFont
 from typing import Dict, Any, Optional
 
 
 class PatientButton(QPushButton):
     """
-    # Iteration 2.1: PatientButton - Basic structure
-    # Iteration 2.2: PatientButton - Styling & Layout
-    # Iteration 2.3: PatientButton - Signals & Click handling
+    Clickable button representing a patient.
     
-    # Clickable button with patient data.
-    # Shows first name, last name, birthdate and IDs.
-    # Styling: Green when selected, Gray otherwise.
-    # Emits signal on click for external processing.
+    Displays patient ID (self-documenting format: XXXX-YYYY-MM-DD-G)
+    which includes UUID, birthdate, and gender.
+    
+    Styling: Green when selected, Gray otherwise.
+    Emits signal on click for external processing.
     """
     
-    # === ITERATION 2.3: # Custom Signal definition ===
-    # Dependency: PySide6.QtCore.Signal
-    # # Signal emitted when button is clicked
-    # # Parameter: int = Patient ID
-    # # Other components can connect to this signal:
-    #   button.patient_clicked.connect(my_handler)
-    patient_clicked = Signal(int)
+    # Custom signal emitted when button is clicked
+    # Parameter: str = Patient ID (format: XXXX-YYYY-MM-DD-G)
+    patient_clicked = Signal(str)
     
     def __init__(self, patient_data: Dict[str, Any]):
         """
-        # Initialize patient button
+        Initialize patient button.
         
         Args:
-            patient_data: Dict with id, first_name, last_name, birthdate, external_id
+            patient_data: Dict with id, sex, birthdate, created_at
         """
         super().__init__()
         
@@ -49,35 +44,28 @@ class PatientButton(QPushButton):
         self.patient_data = patient_data
         self.is_selected = False
         
-        # # Display last name first for search functionality (# not like in forms)
-        name_display = f"{patient_data['last_name']}, {patient_data['first_name']}"
-        geb = patient_data.get("birthdate", "")
-        app_id = f"App-ID: {self.patient_id}"
+        # Display patient ID (self-documenting format)
+        # Example: 7F2A-1990-05-15-M
+        # which shows: UUID prefix, birthdate, gender
+        patient_id_display = patient_data['id']
+        sex_display = {"M": "Männlich", "W": "Weiblich", "D": "Divers"}.get(patient_data.get("sex"), "Unbekannt")
+        birthdate = patient_data.get("birthdate", "")
         
-        ext_id_text = ""
-        if patient_data.get("external_id"):
-            ext_id_text = f"Ext-ID: {patient_data['external_id']}\n"
-        
-        text = f"{name_display}\nBorn: {geb}\n{ext_id_text}{app_id}"
+        text = f"{patient_id_display}\nGeburtsdatum: {birthdate}\nGeschlecht: {sex_display}"
         
         self.setText(text)
         
-        # # Base size
+        # Base size
         self.setMinimumHeight(100)
         self.setMinimumWidth(300)
         
-        # # Base font
+        # Base font
         font = QFont()
         font.setPointSize(10)
         self.setFont(font)
         
-        # # Apply default styling (not selected)
+        # Apply default styling (not selected)
         self._update_style()
-        
-        # === ITERATION 2.3: # Signal connection ===
-        # # Dependency: Internal QPushButton signal "clicked"
-        # # Connect Qt standard signal to custom handler
-        # # How it works:
         # 1. # 1. User clicks button
         # 2. # 2. Qt emits clicked signal internally
         # 3. # 3. Our handler _on_click() is called
@@ -192,13 +180,13 @@ class PatientListWidget(QWidget):
     # # Emitted when user selects a patient from list
     # Parameter: int = Patient-ID
     # # This signal is received by higher components (e.g. CenterArea) empfangen
-    patient_selected = Signal(int)
+    patient_selected = Signal(str)
     
     def __init__(self):
         """
-        # Initialize PatientListWidget
+        Initialize PatientListWidget for v2.0 schema.
         
-        Layout-Struktur:
+        Layout structure:
         PatientListWidget (QWidget)
             └─ QVBoxLayout
                 └─ QScrollArea
@@ -208,26 +196,21 @@ class PatientListWidget(QWidget):
         """
         super().__init__()
         
-        # === State-Management ===
-        # # Stores currently selected patient
-        self.selected_patient_id = None
+        # State management
+        self.selected_patient_id: str | None = None
         
-        # # Dict for quick button lookup by patient ID
-        # # Structure: {patient_id: PatientButton}
+        # Dict for quick button lookup by patient ID (format: XXXX-YYYY-MM-DD-G)
         self.patient_buttons: dict = {}
         
-        # === # Layout setup ===
+        # Layout setup
         main_layout = QVBoxLayout()
         main_layout.setContentsMargins(0, 0, 0, 0)
         
-        # === # ScrollArea for long patient lists ===
-        # Dependency: PySide6.QtWidgets.QScrollArea
-        # # Enables scrolling for many patients
+        # ScrollArea for long patient lists
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         
-        # === # Container for patient buttons ===
-        # # Widget embedded in ScrollArea
+        # Container for patient buttons
         self.container = QWidget()
         self.container_layout = QVBoxLayout()
         self.container_layout.setSpacing(10)
@@ -265,30 +248,23 @@ class PatientListWidget(QWidget):
         # Füge zu Layout hinzu (# show button)
         self.container_layout.addWidget(btn)
     
-    def remove_patient(self, patient_id: int) -> None:
+    def remove_patient(self, patient_id: str) -> None:
         """
-        # Remove patient from list
-        
-        # Process:
-        1. # 1. Get button from dict
-        2. # 2. Remove button from layout
-        3. # 3. Delete button widget
-        4. # 4. Remove from dict
-        5. # 5. Deselect if was selected
+        Remove patient from list.
         
         Args:
-            patient_id: ID of patient to delete
+            patient_id (str): ID of patient to delete (format: XXXX-YYYY-MM-DD-G)
         """
         if patient_id in self.patient_buttons:
             btn = self.patient_buttons[patient_id]
-            # Entferne vom visuellen Layout
+            # Remove from visual layout
             self.container_layout.removeWidget(btn)
-            # Lösche Qt-Widget
+            # Delete Qt widget
             btn.deleteLater()
-            # # 4. Remove from dictionary
+            # Remove from dictionary
             del self.patient_buttons[patient_id]
             
-            # Falls dieser Patient selektiert war, deselektiere
+            # Deselect if this patient was selected
             if self.selected_patient_id == patient_id:
                 self.selected_patient_id = None
     
@@ -309,46 +285,31 @@ class PatientListWidget(QWidget):
         self.patient_buttons.clear()
         self.selected_patient_id = None
     
-    def select_patient(self, patient_id: int) -> None:
+    def select_patient(self, patient_id: str) -> None:
         """
-        # Select a patient in list
-        
-        # Process:
-        1. # 1. If patient selected, deselect it (set_selected(False))
-        2. # 2. Select new patient (set_selected(True))
-        3. # 3. Store new selection
-        4. # 4. Send patient_selected signal
+        Select a patient in list.
         
         Args:
-            patient_id: ID of patient to select
+            patient_id (str): ID of patient to select (format: XXXX-YYYY-MM-DD-G)
         """
-        # # Deselect old selection
+        # Deselect old selection
         if self.selected_patient_id and self.selected_patient_id in self.patient_buttons:
             self.patient_buttons[self.selected_patient_id].set_selected(False)
         
-        # # 2. Select new patient
+        # Select new patient
         if patient_id in self.patient_buttons:
             self.patient_buttons[patient_id].set_selected(True)
             self.selected_patient_id = patient_id
             
-            # === # Send signal using emit() ===
-            # Dependency: Signal.emit()
-            # # Notify listeners that patient was selected
+            # Send signal to notify listeners
             self.patient_selected.emit(patient_id)
     
-    def _on_patient_clicked(self, patient_id: int) -> None:
+    def _on_patient_clicked(self, patient_id: str) -> None:
         """
-        === ITERATION 2.4: # Patient click handler ===
-        
-        # Called when PatientButton is clicked
-        (# via signal connection: btn.patient_clicked.connect())
-        
-        # Process:
-        1. # 1. Call select_patient() to select patient
-        2. # 2. select_patient() updates styling and emits signal
+        Handle patient button click.
         
         Args:
-            patient_id: ID des geklickten Patienten
+            patient_id (str): ID of clicked patient
         """
         self.select_patient(patient_id)
 
@@ -360,222 +321,145 @@ class PatientListWidget(QWidget):
 
 class CreatePatientDialog(QDialog):
     """
-    Iteration 2.5: # Modal dialog for creating new patient
+    Modal dialog for creating new patient with v2.0 schema.
     
-    # Features:
-    - # Modal dialog (blocks main window until closed)
-    - # 3 input fields: First name, Last name, Birthdate (dd.mm.yyyy)
-    - # Validation: Date format and required fields
-    - # Returns Dict with patient data or None
+    Refactored for database schema v2.0:
+    - Patient ID is auto-generated (UUID + birthdate + gender)
+    - Only requires: Birthdate and Gender
+    - No more first_name/last_name input
+    
+    Features:
+    - QDateEdit for date picker (GUI calendar)
+    - QComboBox for gender selection (M/W/D)
+    - Automatic validation (QDateEdit handles format)
     
     Usage:
         dialog = CreatePatientDialog(parent_widget)
         if dialog.exec() == QDialog.Accepted:
             patient_data = dialog.get_patient_data()
             if patient_data:
-                # # Create patient with patient_data
+                patient_id = db_manager.create_patient(
+                    birthdate=patient_data["birthdate"],
+                    sex=patient_data["sex"]
+                )
     """
     
     def __init__(self, parent=None):
-        """
-        Initialisiert den CreatePatientDialog
-        
-        Args:
-            parent: Parent widget (for modal behavior)
-        """
+        """Initialize patient creation dialog with date picker and gender selector."""
         super().__init__(parent)
         
-        # === # Dialog configuration ===
+        # Dialog configuration
         self.setWindowTitle("Neuen Patienten erstellen")
-        # setModal(True) makes dialog modal (blocks parent)
         self.setModal(True)
         self.setMinimumWidth(400)
         
-        # === # Layout setup ===
+        # Main layout
         layout = QVBoxLayout()
         
-        # --- # First name input ---
-        layout.addWidget(QLabel("First name:"))
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("e.g. Max")
-        layout.addWidget(self.name_input)
+        # === Birthdate Picker ===
+        layout.addWidget(QLabel("Geburtsdatum:"))
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)  # Opens calendar on click
+        self.date_edit.setDate(QDate(1990, 1, 1))  # Default date
+        self.date_edit.setDisplayFormat("dd.MM.yyyy")  # German format
+        layout.addWidget(self.date_edit)
         
-        # --- # Last name input ---
-        layout.addWidget(QLabel("Last name:"))
-        self.nachname_input = QLineEdit()
-        self.nachname_input.setPlaceholderText("e.g. Mustermann")
-        layout.addWidget(self.nachname_input)
+        # === Gender Selector ===
+        layout.addWidget(QLabel("Geschlecht:"))
+        self.gender_combo = QComboBox()
+        self.gender_combo.addItems(["M (Männlich)", "W (Weiblich)", "D (Divers)"])
+        layout.addWidget(self.gender_combo)
         
-        # --- # Birthdate input ---
-        layout.addWidget(QLabel("Geburtsdatum (dd.mm.yyyy):"))
-        self.date_input = QLineEdit()
-        self.date_input.setPlaceholderText("e.g. 15.03.1990")
-        layout.addWidget(self.date_input)
+        layout.addStretch()
         
-        # --- # Dialog buttons ---
+        # === Dialog Buttons ===
         button_layout = QHBoxLayout()
         
-        ok_btn = QPushButton("Erstellen")
-        ok_btn.clicked.connect(self.accept)
-        button_layout.addWidget(ok_btn)
+        create_btn = QPushButton("Erstellen")
+        create_btn.clicked.connect(self.accept)
+        button_layout.addWidget(create_btn)
         
-        cancel_btn = QPushButton("Cancel")
+        cancel_btn = QPushButton("Abbrechen")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
         
         layout.addLayout(button_layout)
-        
         self.setLayout(layout)
     
-    def get_patient_data(self):
+    def get_patient_data(self) -> dict | None:
         """
-        === ITERATION 2.5: # Data validation ===
+        Return patient data from form.
         
-        Gibt eingegebene Patientendaten zurück oder None bei Validierungsfehler.
-        
-        # Validation steps:
-        1. # 1. Get input from QLineEdit fields
-        2. # 2. Trim whitespace (.strip())
-        3. # 3. Check if required fields are empty
-        4. # 4. Validate date format (dd.mm.yyyy)
-        5. # 5. Return Dict or None
-        
-        Dependencies:
-        - QMessageBox for error output
+        Converts QDate to YYYY-MM-DD format and extracts gender code.
         
         Returns:
-            Dict with {first_name, last_name, birthdate} or None on error
+            Dict with keys {birthdate: str (YYYY-MM-DD), sex: str (M/W/D)}
+            or None if validation fails
         """
-        # # Get and clean input
-        first_name = self.name_input.text().strip()
-        last_name = self.nachname_input.text().strip()
-        birthdate = self.date_input.text().strip()
+        # Extract date from QDateEdit
+        qdate = self.date_edit.date()
+        birthdate = qdate.toString("yyyy-MM-dd")  # Format as YYYY-MM-DD
         
-        # # Validation: First name required
-        if not first_name:
-            QMessageBox.warning(self, "Error", "First name is required!")
-            return None
+        # Extract gender code from combo box (format: "M (Männlich)" → "M")
+        gender_text = self.gender_combo.currentText()
+        sex = gender_text[0]  # Take first character (M, W, or D)
         
-        # Validation: Last name required
-        if not last_name:
-            QMessageBox.warning(self, "Error", "Last name is required!")
-            return None
-        
-        # Validation: Birthdate required
-        if not birthdate:
-            QMessageBox.warning(self, "Error", "Birthdate is required!")
-            return None
-        
-        # === # Validate date format ===
-        # Dependency: String.split()
-        # # Check format: dd.mm.yyyy
-        # Regeln:
-        # - # Exactly 3 parts (separated by .)
-        # - # Day: 2 digits (01-31)
-        # - # Month: 2 digits (01-12)
-        # - # Year: 4 digits (1900-2100)
-        try:
-            parts = birthdate.split(".")
-            # # Check structure
-            if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
-                raise ValueError("# Wrong format")
-            
-            # # Check value ranges
-            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
-            if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
-                raise ValueError("# Invalid values")
-                
-        except (ValueError, IndexError):
-            QMessageBox.warning(self, "Error", "Invalid date format!\nPlease use: dd.mm.yyyy\n\nExample: 15.03.1990")
-            return None
-        
-        # # All validations passed → return Dict
+        # Return validated data
         return {
-            "first_name": first_name,
-            "last_name": last_name,
-            "birthdate": birthdate
+            "birthdate": birthdate,
+            "sex": sex
         }
 
 
 class EditPatientDialog(QDialog):
     """
-    Iteration 3_1: # Dialog for editing patient
-    Like CreatePatientDialog but shows existing data und and uses same error messages
+    Display patient information dialog (read-only for v2.0 schema).
+    
+    Patient IDs are immutable (format: XXXX-YYYY-MM-DD-G contains birthdate + gender).
+    Therefore, editing is not allowed. This dialog displays patient information only.
     """
-    def __init__(self, parent=None, patient_data = None):
+    def __init__(self, parent=None, patient_data: Dict[str, Any] | None = None):
         super().__init__(parent)
+        self.patient_data = patient_data or {}
 
-        self.setWindowTitle("Edit patient")
+        self.setWindowTitle("Patient Information")
         self.setModal(True)
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(450)
 
         layout = QVBoxLayout()
 
-        layout.addWidget(QLabel("First name:"))
-        self.name_input = QLineEdit()
-        self.name_input.setText(patient_data.get("first_name", "") if patient_data else "")
-        layout.addWidget(self.name_input)
+        # Patient ID (immutable, contains birthdate + gender)
+        layout.addWidget(QLabel("Patient ID:"))
+        id_label = QLabel(self.patient_data.get("id", ""))
+        id_label.setStyleSheet("font-weight: bold; font-family: courier; font-size: 12pt;")
+        layout.addWidget(id_label)
 
-        
-        layout.addWidget(QLabel("Last name:"))
-        self.nachname_input = QLineEdit()
-        self.nachname_input.setText(patient_data.get("last_name", "") if patient_data else "")
-        layout.addWidget(self.nachname_input)
-        
-        layout.addWidget(QLabel("Birthdate (dd.mm.yyyy):"))
-        self.date_input = QLineEdit()
-        self.date_input.setText(patient_data.get("birthdate", "") if patient_data else "")
-        layout.addWidget(self.date_input)
+        # Birthdate (read-only, extracted from ID)
+        layout.addWidget(QLabel("Birthdate:"))
+        birthdate = self.patient_data.get("birthdate", "")
+        layout.addWidget(QLabel(birthdate))
 
-        button_layout = QHBoxLayout()
+        # Gender (read-only, extracted from ID)
+        layout.addWidget(QLabel("Gender:"))
+        sex_code = self.patient_data.get("sex", "")
+        sex_display = {"M": "Male", "W": "Female", "D": "Diverse"}
+        sex_label = QLabel(sex_display.get(sex_code, sex_code))
+        layout.addWidget(sex_label)
 
-        save_btn = QPushButton("Save")
-        save_btn.clicked.connect(self.accept)
-        button_layout.addWidget(save_btn)
+        layout.addSpacing(20)
+        layout.addWidget(QLabel("Patient data is immutable (ID includes birthdate and gender)."))
+        layout.addSpacing(20)
 
-        cancel_btn= QPushButton("Cancel")
-        cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(cancel_btn)
+        # Close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
         self.setLayout(layout)
 
-    def get_patient_data(self):
-        """# Validate and return updated patient data (wie CreatePatientDialog)"""
-        first_name = self.name_input.text().strip()
-        last_name = self.nachname_input.text().strip()
-        birthdate = self.date_input.text().strip()
-
-        if not first_name:
-            QMessageBox.warning(self, "Error", "First name is required!")
-            return None
-
-        if not last_name:
-            QMessageBox.warning(self, "Error", "Last name is required!")
-            return None
-
-        if not birthdate:
-            QMessageBox.warning(self, "Error", "Birthdate is required!")
-            return None
-
-        try:
-            parts = birthdate.split(".")
-            if len(parts) != 3 or len(parts[0]) != 2 or len(parts[1]) != 2 or len(parts[2]) != 4:
-                raise ValueError("# Wrong format")
-
-            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
-            if not (1 <= day <= 31 and 1 <= month <= 12 and 1900 <= year <= 2100):
-                raise ValueError("# Invalid values")
-
-        except (ValueError, IndexError):
-            QMessageBox.warning(self, "Error", "Invalid date format!\nPlease use: dd.mm.yyyy\n\nExample: 15.03.1990")
-            return None
-
-        return {
-            "first_name": first_name,
-            "last_name": last_name,
-            "birthdate": birthdate
-        } 
+    def get_patient_data(self) -> Dict[str, str]:
+        """Return patient data (read-only, no changes made)."""
+        return self.patient_data 
 
 
 class DeleteConfirmDialog(QDialog):
@@ -616,3 +500,138 @@ class DeleteConfirmDialog(QDialog):
     def ask(self) -> bool:
         """# Open dialog and return True if Yes, False otherwise."""
         return self.exec() == QDialog.Accepted
+
+class DuplicatePatientDialog(QDialog):
+    """
+    Dialog for handling duplicate patients during TBI import.
+    
+    Shows two patient records side by side (EyeCon existing vs TBI importing).
+    User chooses: Merge (use TBI), Skip (keep EyeCon), or Cancel (abort).
+    """
+
+    def __init__(self, parent=None, eyecon_patient: Dict[str, Any] | None = None, 
+                 tbi_patient: Dict[str, Any] | None = None):
+        """
+        Initialize duplicate patient dialog.
+        
+        Args:
+            parent: Parent widget
+            eyecon_patient: Existing patient record in EyeCon database
+            tbi_patient: Patient record from TBI headset import
+        """
+        super().__init__(parent)
+        self.eyecon_patient = eyecon_patient or {}
+        self.tbi_patient = tbi_patient or {}
+        self.selected_action: str = "cancel"
+
+        self.setWindowTitle("Duplicate Patient Detected")
+        self.setModal(True)
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(400)
+
+        layout = QVBoxLayout()
+
+        # Warning message
+        warning_label = QLabel("⚠️  Same patient found in both EyeCon and TBI import!")
+        warning_font = QFont()
+        warning_font.setPointSize(11)
+        warning_font.setBold(True)
+        warning_label.setFont(warning_font)
+        layout.addWidget(warning_label)
+
+        # Choice instruction
+        instruct_label = QLabel("Choose action:")
+        layout.addWidget(instruct_label)
+
+        # Patient comparison layout (2 columns)
+        comparison_layout = QHBoxLayout()
+
+        # Left column: EyeCon patient
+        eyecon_group = self._create_patient_group("EyeCon (Existing)", self.eyecon_patient)
+        comparison_layout.addWidget(eyecon_group)
+
+        # Right column: TBI patient
+        tbi_group = self._create_patient_group("TBI Headset (Importing)", self.tbi_patient)
+        comparison_layout.addWidget(tbi_group)
+
+        layout.addLayout(comparison_layout)
+
+        layout.addSpacing(20)
+
+        # Action buttons
+        button_layout = QHBoxLayout()
+
+        merge_btn = QPushButton("✓ Merge (use TBI data)")
+        merge_btn.setToolTip("Replace EyeCon data with TBI data")
+        merge_btn.clicked.connect(self._on_merge_clicked)
+        button_layout.addWidget(merge_btn)
+
+        skip_btn = QPushButton("→ Skip (keep EyeCon)")
+        skip_btn.setToolTip("Keep existing EyeCon data, discard TBI data")
+        skip_btn.clicked.connect(self._on_skip_clicked)
+        button_layout.addWidget(skip_btn)
+
+        cancel_btn = QPushButton("✕ Cancel")
+        cancel_btn.setToolTip("Abort import")
+        cancel_btn.clicked.connect(self._on_cancel_clicked)
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+        self.setLayout(layout)
+
+    def _create_patient_group(self, title: str, patient: Dict[str, Any]) -> QGroupBox:
+        """Create a group box displaying patient information."""
+        group = QGroupBox(title)
+        layout = QVBoxLayout()
+
+        # Patient ID
+        id_label = QLabel(f"ID: {patient.get('id', 'N/A')}")
+        id_font = QFont()
+        id_font.setFamily("Courier")
+        id_font.setBold(True)
+        id_font.setPointSize(10)
+        id_label.setFont(id_font)
+        layout.addWidget(id_label)
+
+        # Birthdate
+        birthdate = patient.get("birthdate", "N/A")
+        layout.addWidget(QLabel(f"Birthdate: {birthdate}"))
+
+        # Gender
+        sex_code = patient.get("sex", "")
+        sex_display = {"M": "Male", "W": "Female", "D": "Diverse"}
+        sex_label = sex_display.get(sex_code, "N/A")
+        layout.addWidget(QLabel(f"Gender: {sex_label}"))
+
+        # Recording count (if available)
+        recordings = patient.get("recordings", [])
+        if isinstance(recordings, list):
+            layout.addWidget(QLabel(f"Recordings: {len(recordings)}"))
+
+        layout.addStretch()
+        group.setLayout(layout)
+        return group
+
+    def _on_merge_clicked(self) -> None:
+        """User chose to merge (use TBI data)."""
+        self.selected_action = "merge"
+        self.accept()
+
+    def _on_skip_clicked(self) -> None:
+        """User chose to skip (keep EyeCon data)."""
+        self.selected_action = "skip"
+        self.accept()
+
+    def _on_cancel_clicked(self) -> None:
+        """User chose to cancel import."""
+        self.selected_action = "cancel"
+        self.reject()
+
+    def get_action(self) -> str:
+        """
+        Get the user's chosen action.
+        
+        Returns:
+            'merge', 'skip', or 'cancel'
+        """
+        return self.selected_action

@@ -10,7 +10,7 @@ from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog
+from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListWidget, CreatePatientDialog, DuplicatePatientDialog
 from data_manager import PatientDataManager
 from src.importer import TBIHeadsetImporter
 from src.camera_controller import CameraController
@@ -1259,17 +1259,17 @@ class CenterArea(QWidget):
         # Connect recording player back button
         self.recording_player.back_clicked.connect(self._on_recording_back_clicked)
 
-    def _on_patient_selected(self, patient_id: int) -> None:
+    def _on_patient_selected(self, patient_id: str) -> None:
         """
         Handle patient selection from PatientListWidget.
         
         This method:
         1. Stores selected patient ID for CRUD operations
         2. Fetches patient data from database
-        3. Updates sidebar with patient name and recordings
+        3. Updates sidebar with patient info and recordings
         
         Parameters:
-            patient_id (int): Database ID of selected patient
+            patient_id (str): Database ID of selected patient (format: XXXX-YYYY-MM-DD-G)
         """
         # Store currently selected patient ID for CRUD operations
         self.selected_patient_id = patient_id
@@ -1277,8 +1277,9 @@ class CenterArea(QWidget):
         # Fetch patient data from database
         patient = self.manager.get_patient(patient_id)
         if patient:
-            # Format patient name for display: "LastName, FirstName"
-            patient_name = f"{patient['last_name']}, {patient['first_name']}"
+            # Format patient display: Show patient ID (self-documenting)
+            # ID format: XXXX-YYYY-MM-DD-G includes birthdate and gender
+            patient_name = patient['id']
             
             # Update sidebar patient display and load recordings
             # Pass patient_id to trigger recordings update in LeftArea
@@ -1302,11 +1303,11 @@ class CenterArea(QWidget):
         if dlg.exec() == QDialog.Accepted:
             data = dlg.get_patient_data()
             if data:
-                # Create new patient in database
+                # Create new patient in database with v2.0 schema
+                # patient_id is auto-generated in format: XXXX-YYYY-MM-DD-G
                 patient_id = self.manager.create_patient(
-                    first_name=data["first_name"],
-                    last_name=data["last_name"],
-                    birthdate=data["birthdate"]
+                    birthdate=data["birthdate"],
+                    sex=data["sex"]
                 )
                 # Fetch patient from database (includes auto-generated ID)
                 patient = self.manager.get_patient(patient_id)
@@ -1347,8 +1348,8 @@ class CenterArea(QWidget):
         """
         Handle edit patient button click.
         
-        Shows edit dialog with current patient data.
-        On approval, updates patient in database and refreshes UI list.
+        Shows read-only patient information dialog (v2.0: patient IDs are immutable).
+        Patient data cannot be edited after creation.
         """
         # Check if patient is selected
         if self.selected_patient_id is None:
@@ -1361,24 +1362,9 @@ class CenterArea(QWidget):
             QMessageBox.warning(self, "Error", "Patient not found.")
             return
         
-        # Open edit patient dialog
+        # Open patient information dialog (read-only)
         dlg = EditPatientDialog(self, patient_data=patient)
-        if dlg.exec() == QDialog.Accepted:
-            updated = dlg.get_patient_data()
-            if updated:
-                # Update patient in database
-                self.manager.update_patient(
-                    self.selected_patient_id,
-                    first_name=updated["first_name"],
-                    last_name=updated["last_name"],
-                )
-                # Refresh UI: remove old button and add updated one
-                self.patient_list.remove_patient(self.selected_patient_id)
-                refreshed = self.manager.get_patient(self.selected_patient_id)
-                if refreshed:
-                    self.patient_list.add_patient(refreshed)
-                    # Restore selection to updated patient
-                    self.patient_list.select_patient(self.selected_patient_id)
+        dlg.exec()
     
     def _on_recording_back_clicked(self) -> None:
         """

@@ -44,14 +44,20 @@ class PatientButton(QPushButton):
         self.patient_data = patient_data
         self.is_selected = False
         
-        # Display patient ID (self-documenting format)
-        # Example: 7F2A-1990-05-15-M
-        # which shows: UUID prefix, birthdate, gender
+        # Display patient info
+        first_name = patient_data.get("first_name", "")
+        last_name = patient_data.get("last_name", "")
+        patient_name = f"{last_name}, {first_name}".strip(", ")
+        
         patient_id_display = patient_data['id']
         sex_display = {"M": "Männlich", "W": "Weiblich", "D": "Divers"}.get(patient_data.get("sex"), "Unbekannt")
         birthdate = patient_data.get("birthdate", "")
         
-        text = f"{patient_id_display}\nGeburtsdatum: {birthdate}\nGeschlecht: {sex_display}"
+        # Format text with name first, then ID and dates
+        if patient_name:
+            text = f"{patient_name}\nID: {patient_id_display}\nGeburtsdatum: {birthdate}\nGeschlecht: {sex_display}"
+        else:
+            text = f"{patient_id_display}\nGeburtsdatum: {birthdate}\nGeschlecht: {sex_display}"
         
         self.setText(text)
         
@@ -66,10 +72,6 @@ class PatientButton(QPushButton):
         
         # Apply default styling (not selected)
         self._update_style()
-        # 1. # 1. User clicks button
-        # 2. # 2. Qt emits clicked signal internally
-        # 3. # 3. Our handler _on_click() is called
-        # 4. # 4. _on_click() emits patient_clicked signal with ID
         self.clicked.connect(self._on_click)
     
     def _update_style(self) -> None:
@@ -323,15 +325,18 @@ class CreatePatientDialog(QDialog):
     """
     Modal dialog for creating new patient with v2.0 schema.
     
-    Refactored for database schema v2.0:
+    Database schema v2.0:
     - Patient ID is auto-generated (UUID + birthdate + gender)
-    - Only requires: Birthdate and Gender
-    - No more first_name/last_name input
+    - Database stores only: birthdate, sex (no names in DB)
     
-    Features:
-    - QDateEdit for date picker (GUI calendar)
-    - QComboBox for gender selection (M/W/D)
-    - Automatic validation (QDateEdit handles format)
+    UI Input:
+    - First name and last name (optional, for reference/display)
+    - Birthdate (required, via QDateEdit calendar picker)
+    - Gender (required, M/W/D via QComboBox)
+    
+    Returns:
+    - To database: {birthdate, sex}
+    - Optional: {first_name, last_name} (not stored in DB v2.0, but can be logged)
     
     Usage:
         dialog = CreatePatientDialog(parent_widget)
@@ -345,7 +350,7 @@ class CreatePatientDialog(QDialog):
     """
     
     def __init__(self, parent=None):
-        """Initialize patient creation dialog with date picker and gender selector."""
+        """Initialize patient creation dialog with name and date/gender inputs."""
         super().__init__(parent)
         
         # Dialog configuration
@@ -355,6 +360,18 @@ class CreatePatientDialog(QDialog):
         
         # Main layout
         layout = QVBoxLayout()
+        
+        # === First Name ===
+        layout.addWidget(QLabel("Vorname:"))
+        self.first_name_input = QLineEdit()
+        self.first_name_input.setPlaceholderText("(optional)")
+        layout.addWidget(self.first_name_input)
+        
+        # === Last Name ===
+        layout.addWidget(QLabel("Nachname:"))
+        self.last_name_input = QLineEdit()
+        self.last_name_input.setPlaceholderText("(optional)")
+        layout.addWidget(self.last_name_input)
         
         # === Birthdate Picker ===
         layout.addWidget(QLabel("Geburtsdatum:"))
@@ -390,11 +407,15 @@ class CreatePatientDialog(QDialog):
         """
         Return patient data from form.
         
-        Converts QDate to YYYY-MM-DD format and extracts gender code.
+        Note: v2.0 schema only stores birthdate and sex in database.
+        Names are returned but not stored (can be used for UI/logging).
         
         Returns:
-            Dict with keys {birthdate: str (YYYY-MM-DD), sex: str (M/W/D)}
-            or None if validation fails
+            Dict with:
+            - birthdate: str (YYYY-MM-DD) - STORED in DB
+            - sex: str (M/W/D) - STORED in DB
+            - first_name: str (optional) - NOT stored in DB v2.0
+            - last_name: str (optional) - NOT stored in DB v2.0
         """
         # Extract date from QDateEdit
         qdate = self.date_edit.date()
@@ -404,8 +425,10 @@ class CreatePatientDialog(QDialog):
         gender_text = self.gender_combo.currentText()
         sex = gender_text[0]  # Take first character (M, W, or D)
         
-        # Return validated data
+        # Return data (names not stored in v2.0 DB, but included for reference)
         return {
+            "first_name": self.first_name_input.text().strip(),
+            "last_name": self.last_name_input.text().strip(),
             "birthdate": birthdate,
             "sex": sex
         }

@@ -1306,6 +1306,8 @@ class CenterArea(QWidget):
                 # Create new patient in database with v2.0 schema
                 # patient_id is auto-generated in format: XXXX-YYYY-MM-DD-G
                 patient_id = self.manager.create_patient(
+                    first_name=data.get("first_name", ""),
+                    last_name=data.get("last_name", ""),
                     birthdate=data["birthdate"],
                     sex=data["sex"]
                 )
@@ -1420,7 +1422,14 @@ class AppLayout(QWidget):
 
         # === Shared Resources ===
         # Create CameraController once, share with all screens
-        self.camera_controller = CameraController()
+        # Gracefully handle missing hardware
+        try:
+            self.camera_controller = CameraController()
+        except Exception as e:
+            import logging
+            logging.warning(f"Camera initialization failed: {e}")
+            logging.warning("Continuing without camera hardware. UI will be functional.")
+            self.camera_controller = None  # Will be handled by CenterArea
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

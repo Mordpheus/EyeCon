@@ -170,14 +170,16 @@ def test_database_schema():
     
     assert 'id' in patient_cols, "Missing 'id' column"
     assert patient_cols['id'] == 'TEXT', "ID should be TEXT type"
+    assert 'first_name' in patient_cols, "Missing 'first_name' column"
+    assert 'last_name' in patient_cols, "Missing 'last_name' column"
     assert 'birthdate' in patient_cols, "Missing 'birthdate' column"
     assert 'sex' in patient_cols, "Missing 'sex' column"
-    assert 'first_name' not in patient_cols, "Old 'first_name' should be removed"
-    assert 'last_name' not in patient_cols, "Old 'last_name' should be removed"
     assert 'external_id' not in patient_cols, "Old 'external_id' should be removed"
     
     print("✓ Patient table schema correct:")
-    print(f"  - id: TEXT")
+    print(f"  - id: TEXT (Primary Key)")
+    print(f"  - first_name: TEXT")
+    print(f"  - last_name: TEXT")
     print(f"  - birthdate: TEXT")
     print(f"  - sex: TEXT")
     

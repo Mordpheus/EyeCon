@@ -79,7 +79,7 @@ class PatientDataManager:
         return dt.strftime("%Y-%m-%d-%H-%M-%S")
 
     def init(self) -> None:
-        """Initialize database and create tables according to NEW SCHEMA v2.0."""
+        """Initialize database and create tables according to SCHEMA v2.0."""
         # Create parent directories if they don't exist
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         first_time = not self.db_path.exists()
@@ -90,16 +90,17 @@ class PatientDataManager:
         self.conn.row_factory = sqlite3.Row
         cur = self.conn.cursor()
 
-        # === NEW SCHEMA v2.0: Patient Table ===
-        # Changed from INTEGER id to TEXT id with format: XXXX-YYYY-MM-DD-G
-        # Removed: external_id, first_name, last_name
-        # These were redundant - now everything is in the ID and metadata columns
+        # === SCHEMA v2.0: Patient Table ===
+        # Patient ID: TEXT format XXXX-YYYY-MM-DD-G (UUID prefix + Birthdate + Gender)
+        # Stores: first_name, last_name, birthdate, sex
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS patient (
                 id TEXT PRIMARY KEY,
-                sex TEXT NOT NULL,
+                first_name TEXT,
+                last_name TEXT,
                 birthdate TEXT NOT NULL,
+                sex TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -132,13 +133,15 @@ class PatientDataManager:
             except Exception as e:
                 print(f"⚠️  Could not clear old test data: {e}")
 
-    def create_patient(self, birthdate: str, sex: str) -> str:
+    def create_patient(self, birthdate: str, sex: str, first_name: str = "", last_name: str = "") -> str:
         """
         Create new patient record with auto-generated ID.
         
         Args:
             birthdate: Patient birthdate in format YYYY-MM-DD or DD.MM.YYYY
             sex: Single character gender: M (male), W (female), D (diverse)
+            first_name: Optional first name
+            last_name: Optional last name
         
         Returns:
             Generated patient ID in format XXXX-YYYY-MM-DD-G
@@ -155,8 +158,9 @@ class PatientDataManager:
         # Insert into database
         cur = self.conn.cursor()
         cur.execute(
-            "INSERT INTO patient (id, sex, birthdate) VALUES (?, ?, ?)",
-            (patient_id, sex, birthdate)
+            """INSERT INTO patient (id, first_name, last_name, sex, birthdate) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (patient_id, first_name.strip(), last_name.strip(), sex, birthdate)
         )
         self.conn.commit()
         return patient_id

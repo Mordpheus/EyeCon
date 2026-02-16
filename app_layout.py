@@ -338,6 +338,7 @@ class RecordingPlayerScreen(QWidget):
     """Screen to display and play a recording video."""
     
     back_clicked = Signal()  # Signal emitted when back button clicked
+    recordings_updated = Signal(list)  # Signal emitted when recordings list should refresh
     
     def __init__(self, camera_controller: CameraController = None):
         super().__init__()
@@ -351,6 +352,10 @@ class RecordingPlayerScreen(QWidget):
         # Patient info (set when navigating to recording screen)
         self.current_patient_id = None
         self.current_patient_display = "No patient selected"
+        
+        # Manager reference (set by parent CenterArea)
+        self.manager = None
+        self.on_recordings_updated = None  # Callback to refresh recordings list
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -429,8 +434,11 @@ class RecordingPlayerScreen(QWidget):
         controls_layout = QHBoxLayout()
         
         self.play_btn = QPushButton("▶ Abspielen")
+        self.play_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
         self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn.setStyleSheet("background-color: #ffaa44; color: white; font-weight: bold;")
         self.stop_btn = QPushButton("⏹ Stopp")
+        self.stop_btn.setStyleSheet("background-color: #aa4444; color: white; font-weight: bold;")
         
         self.play_btn.clicked.connect(self.media_player.play)
         self.pause_btn.clicked.connect(self.media_player.pause)
@@ -683,8 +691,17 @@ class RecordingPlayerScreen(QWidget):
     
     def _on_start_recording(self):
         """Start recording video from camera (8-second Pupillometry Protocol)."""
-        if not self.camera_controller.capture:
-            self.recording_info.setText("✗ Fehler: Keine Kamera verbunden!")
+        # Check if camera controller exists
+        if not self.camera_controller:
+            self.recording_info.setText("✗ Fehler: Kamera-Controller nicht verfügbar!")
+            print("[RecordingPlayerScreen] ERROR: camera_controller is None")
+            return
+        
+        # Check if camera is actually connected
+        if not self.camera_controller.capture or self.camera_controller.capture is None:
+            self.recording_info.setText("✗ Fehler: Keine Kamera verbunden! Bitte in Settings verbinden.")
+            print("[RecordingPlayerScreen] ERROR: camera_controller.capture is None or False")
+            print(f"[RecordingPlayerScreen] capture object: {self.camera_controller.capture}")
             return
         
         if self.is_recording:
@@ -692,6 +709,7 @@ class RecordingPlayerScreen(QWidget):
             return
         
         try:
+            print("[RecordingPlayerScreen] Starting recording...")
             # Deaktiviere Start-Button
             self.is_recording = True
             self.start_recording_btn.setEnabled(False)
@@ -707,6 +725,7 @@ class RecordingPlayerScreen(QWidget):
             self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus bei 1.0-1.5s)")
             
         except Exception as e:
+            print(f"[RecordingPlayerScreen] EXCEPTION: {str(e)}")
             self.recording_info.setText(f"✗ Fehler beim Starten der Aufnahme: {str(e)}")
             self.is_recording = False
             self.start_recording_btn.setEnabled(True)
@@ -818,22 +837,54 @@ class RecordingPlayerScreen(QWidget):
     
     def _complete_recording(self):
         """
-        Wird aufgerufen wenn Recording 8s lang läuft und automatisch speichert
+        Called when recording completes (8 seconds).
+        Saves file and adds to database.
         """
         try:
-            # Datei sollte bereits gespeichert sein
+            # File should already be saved to disk
             if self.camera_controller.recording_file:
-                file_size_mb = Path(self.camera_controller.recording_file).stat().st_size / (1024 * 1024)
-                self.recording_info.setText(
-                    f"✓ Recording erfolgreich gespeichert:\n"
-                    f"{Path(self.camera_controller.recording_file).name} ({file_size_mb:.2f}MB)"
-                )
+                file_path = self.camera_controller.recording_file
+                file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+                
+                # Add recording to database if manager is available
+                if self.manager and self.current_patient_id:
+                    from time import time
+                    # Store full file path as recording_id so we can find the file later
+                    recording_id = str(file_path)
+                    current_timestamp = int(time())
+                    
+                    self.manager.add_recording(
+                        recording_id=recording_id,
+                        patient_id=self.current_patient_id,
+                        date=current_timestamp,
+                        baseline=0
+                    )
+                    print(f"[RecordingPlayerScreen] Recording added to database: {recording_id}")
+                    
+                    # Emit signal if callback is set
+                    if self.on_recordings_updated:
+                        recordings = self.manager.get_recordings(self.current_patient_id)
+                        self.on_recordings_updated(recordings)
+                    
+                    self.recording_info.setText(
+                        f"[OK] Recording erfolgreich gespeichert und in Datenbank eingetragen:\n"
+                        f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
+                    )
+                else:
+                    self.recording_info.setText(
+                        f"[OK] Recording gespeichert (Datenbank nicht verfügbar):\n"
+                        f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
+                    )
+                
+                # Clear the recording file for next recording attempt
+                self.camera_controller.recording_file = None
             else:
-                self.recording_info.setText("✗ Recording-Datei nicht gefunden!")
+                self.recording_info.setText("[FAIL] Recording-Datei nicht gefunden!")
         except Exception as e:
-            self.recording_info.setText(f"✗ Fehler: {str(e)}")
+            print(f"[RecordingPlayerScreen] Error in _complete_recording: {str(e)}")
+            self.recording_info.setText(f"[FAIL] Fehler: {str(e)}")
         
-        # Reset Button-Zustände
+        # Reset button states
         self.is_recording = False
         self.start_recording_btn.setEnabled(True)
         self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
@@ -1582,6 +1633,7 @@ class CenterArea(QWidget):
         
         # Screen 1: Recording Player - Pass camera controller
         self.recording_player = RecordingPlayerScreen(camera_controller=self.camera_controller)
+        self.recording_player.manager = self.manager  # Provide access to data manager
         self.stacked_widget.addWidget(self.recording_player)
         
         # Screen 2: Help
@@ -1832,6 +1884,9 @@ Möchten Sie erneut versuchen?"""
         Navigates to recording screen for the currently selected patient.
         If no patient is selected, shows an error message.
         """
+        print(f"[CenterArea] _on_new_recording_clicked() called")
+        print(f"[CenterArea] selected_patient_id: {self.selected_patient_id}")
+        
         if not self.selected_patient_id:
             QMessageBox.warning(self, "Fehler", "Bitte wählen Sie zuerst einen Patienten aus.")
             return
@@ -1843,11 +1898,23 @@ Möchten Sie erneut versuchen?"""
             last_name = patient.get('last_name', '')
             patient_display = f"{patient['id']} - {last_name}, {first_name}"
             
+            print(f"[CenterArea] Navigating to recording screen for patient: {patient_display}")
             # Set patient info on recording screen and navigate to it
             self.recording_player.set_patient_info(patient_display, self.selected_patient_id)
             self.stacked_widget.setCurrentIndex(1)  # Show recording screen
         else:
             QMessageBox.warning(self, "Fehler", "Patient konnte nicht geladen werden.")
+
+    def setup_recording_callbacks(self) -> None:
+        """
+        Set up callback for when recordings are updated (called from Main window).
+        This allows the Recording screen to notify the sidebar when new recordings are added.
+        """
+        def on_recordings_updated(recordings):
+            # Update sidebar recordings dropdown
+            self.parent().left.update_recordings_dropdown(recordings)
+        
+        self.recording_player.on_recordings_updated = on_recordings_updated
 
     def refresh_patient_list(self) -> None:
         """
@@ -1957,6 +2024,9 @@ class AppLayout(QWidget):
         self.center.recording_player.back_clicked.connect(self._on_back_to_patients)
         self.center.help_screen.back_clicked.connect(self._on_back_to_patients)
         self.center.settings_screen.back_clicked.connect(self._on_back_to_patients)
+        
+        # Set up recording callbacks to update sidebar when new recordings are added
+        self.center.setup_recording_callbacks()
 
     def _on_import_clicked(self):
         """

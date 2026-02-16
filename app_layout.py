@@ -1553,9 +1553,13 @@ class CenterArea(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # --- Button bar: Create | Edit | Delete ---
+        # --- Button bar: Create | Edit | Delete (ONLY visible on Patient List screen) ---
+        # Container widget to easily show/hide all buttons together
+        self.button_container = QWidget()
+        button_row = QHBoxLayout(self.button_container)
+        button_row.setContentsMargins(0, 0, 0, 0)
+        
         # Buttons inherit global stylesheet from Main.py
-        button_row = QHBoxLayout()
         self.btn_create = QPushButton("Create patient")
         self.btn_edit = QPushButton("Edit patient")
         self.btn_delete = QPushButton("Delete patient")
@@ -1565,7 +1569,7 @@ class CenterArea(QWidget):
         button_row.addWidget(self.btn_delete)
         button_row.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
 
-        layout.addLayout(button_row)
+        layout.addWidget(self.button_container)
 
         # === STACKED WIDGET: Switch between different screens ===
         self.stacked_widget = QStackedWidget()
@@ -1588,6 +1592,9 @@ class CenterArea(QWidget):
         
         # Show patient list by default
         self.stacked_widget.setCurrentIndex(0)
+        
+        # Connect signal to update button visibility when screen changes
+        self.stacked_widget.currentChanged.connect(self._on_screen_changed)
         
         layout.addWidget(self.stacked_widget, 1)
 
@@ -1791,10 +1798,30 @@ Möchten Sie erneut versuchen?"""
     def _on_recording_back_clicked(self) -> None:
         """
         Handle back button click from RecordingPlayerScreen.
-        
-        Switch back to patient list view.
+        Switches back to patient list screen.
         """
-        self.stacked_widget.setCurrentIndex(0)  # Show patient list screen
+        self.stacked_widget.setCurrentIndex(0)
+    
+    def _on_screen_changed(self, index: int) -> None:
+        """
+        Handle screen change in stacked widget.
+        Show buttons ONLY on patient list screen (index 0).
+        
+        Screen indices:
+        - 0: Patient List (show buttons)
+        - 1: Recording Player (hide buttons)
+        - 2: Help (hide buttons)
+        - 3: Settings (hide buttons)
+        """
+        # Show buttons only when on patient list screen
+        self.button_container.setVisible(index == 0)
+    
+    def _on_recording_back_clicked(self) -> None:
+        """
+        Handle back button click from RecordingPlayerScreen.
+        Switches back to patient list screen.
+        """
+        self.stacked_widget.setCurrentIndex(0)
     
     def _on_new_recording_clicked(self) -> None:
         """

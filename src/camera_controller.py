@@ -66,6 +66,13 @@ class CameraController:
         # Kamera
         self.capture = None
         self.current_camera_index = None
+        self.capture_lock = None  # Will import threading.Lock when needed
+        
+        # Frame buffering - Background thread continuously reads frames
+        self.frame_thread = None
+        self.frame_thread_running = False
+        self.latest_frame = None
+        self.frame_lock = None
         
         # Video-Aufnahme
         self.is_recording = False
@@ -76,8 +83,49 @@ class CameraController:
         self.stop_recording_requested = False  # Flag für manuelles Stoppen
         self.manual_stop = False  # True wenn Benutzer Stop drückt, False wenn Auto-Stop nach 8s
         
-        # Versuche Serial-Verbindung
-        self._connect_serial()
+        # DON'T auto-connect at startup - wait for user to select port in UI
+        # This prevents locking the camera/serial when the app starts
+        # self._connect_serial()
+        logger.info("CameraController initialized - waiting for user to select port")
+    
+    def disconnect_serial(self) -> bool:
+        """
+        Trenne Serial-Verbindung zu Raspberry Pi
+        
+        Returns:
+            True wenn erfolgreich
+        """
+        if not self.serial_connection:
+            return True  # Already disconnected
+        
+        try:
+            self.serial_connection.close()
+            self.serial_connection = None
+            logger.info(f"Serial-Verbindung zu {self.com_port} geschlossen")
+            return True
+        except Exception as e:
+            logger.error(f"Fehler beim Schließen der Serial-Verbindung: {e}")
+            return False
+    
+    def init_serial(self) -> bool:
+        """
+        Initialisiere Serial-Verbindung: Schließe alte, öffne neue
+        
+        Returns:
+            True wenn erfolgreich, False sonst
+        """
+        # First disconnect old connection if exists
+        try:
+            self.disconnect_serial()
+        except:
+            pass
+        
+        # Add small delay for cleanup
+        import time
+        time.sleep(0.1)
+        
+        # Now reconnect
+        return self._connect_serial()
     
     def _connect_serial(self) -> bool:
         """
@@ -154,7 +202,8 @@ class CameraController:
     def list_cameras(self) -> List[str]:
         """
         Listet alle verfügbaren USB-Kameras auf
-        Nutzt OpenCV mit DirectShow API unter Windows
+        HINWEIS: DirectShow unter Windows ist quirky - wir prüfen nur ob die Indices gültig sind
+        Das vollständige Frame-Test wird in connect_camera() gemacht
         
         Returns:
             List von Kamera-Beschreibungen
@@ -165,31 +214,25 @@ class CameraController:
         
         camera_info = []
         
-        # Versuche, bis zu 10 Kameras zu finden
-        for index in range(10):
+        # Prüfe nur die ersten 5 Indices (normalmente 0 = webcam, 1+ = optional)
+        # WICHTIG: Wir lesen NICHT jeden Frame, um OpenCV-Buffer-Konflikte zu vermeiden
+        for index in range(5):
             try:
                 cap = cv2.VideoCapture(index)
                 
                 if cap.isOpened():
-                    # Lese eine Testframe um zu prüfen, ob Kamera funktioniert
-                    ret, frame = cap.read()
-                    
-                    if ret and frame is not None:
-                        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                        fps = cap.get(cv2.CAP_PROP_FPS)
-                        
-                        info = f"[{index}] Kamera (Auflösung: {width}x{height}, FPS: {fps:.0f})"
-                        camera_info.append(info)
-                        logger.info(f"Kamera gefunden: {info}")
-                    
+                    # Nur Existence Check, KEIN Frame-Test
+                    # Das verhindert OpenCV-Buffer-Probleme
+                    info = f"[{index}] Kamera"
+                    camera_info.append(info)
+                    logger.info(f"Kamera Index {index} verfügbar")
                     cap.release()
                 else:
-                    # Keine weitere Kamera gefunden
+                    # Keine weitere Kamera ab diesem Index
                     break
                     
             except Exception as e:
-                logger.debug(f"Index {index} ist keine gültige Kamera: {e}")
+                logger.debug(f"Index {index} nicht verfügbar: {e}")
                 break
         
         return camera_info if camera_info else []
@@ -209,9 +252,16 @@ class CameraController:
             return False
         
         try:
+            # Initialize the lock for thread-safe capture access
+            import threading
+            if self.capture_lock is None:
+                self.capture_lock = threading.Lock()
+            
             # Bestehende Verbindung schließen
             if self.capture:
                 self.disconnect_camera()
+            
+            print(f"[camera_controller] Opening capture device {device_index}...")
             
             # Neue Verbindung
             self.capture = cv2.VideoCapture(device_index)
@@ -221,22 +271,48 @@ class CameraController:
                 self.capture = None
                 return False
             
+            print(f"[camera_controller] Capture device opened successfully")
+            
             self.current_camera_index = device_index
             
-            # Setze Resolution und FPS für bessere Performance
+            # Setze Resolution für bessere Performance
+            print(f"[camera_controller] Setting resolution to 640x480...")
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             self.capture.set(cv2.CAP_PROP_FPS, 30)
             
+            # Test: Try to read one frame
+            print(f"[camera_controller] Testing frame read...")
+            ret, frame = self.capture.read()
+            if not ret or frame is None:
+                logger.error(f"Cannot read frame from camera {device_index}")
+                self.disconnect_camera()
+                return False
+            
+            print(f"[camera_controller] Frame read successful: {frame.shape}")
             logger.info(f"Verbunden zu Kamera: Index {device_index}")
             
-            # LED anschalten bei Verbindung
-            self.led_on()
+            # Try LED - but don't fail if it doesn't work
+            try:
+                print(f"[camera_controller] Turning LED on...")
+                self.led_on()
+                print(f"[camera_controller] LED on successful")
+            except Exception as led_err:
+                logger.warning(f"LED control failed but camera is connected: {led_err}")
+                # Don't fail - camera is still connected even if LED doesn't work
             
             return True
             
         except Exception as e:
             logger.error(f"Fehler beim Verbinden zur Kamera: {e}")
+            import traceback
+            traceback.print_exc()
+            if self.capture:
+                try:
+                    self.capture.release()
+                    self.capture = None
+                except:
+                    pass
             return False
     
     def disconnect_camera(self):
@@ -252,25 +328,39 @@ class CameraController:
     def get_frame(self) -> Optional[Image.Image]:
         """
         Holt einen Video-Frame von der verbundenen Kamera
+        Thread-safe mit Lock zum Schutz von OpenCV-Capture
         
         Returns:
             PIL Image (RGB format) oder None bei Fehler
         """
+        print(f"[get_frame] capture={self.capture is not None}, isOpened={self.capture.isOpened() if self.capture else False}")
+        
         if not self.capture or not self.capture.isOpened():
             logger.debug("Keine Kamera verbunden")
+            print(f"[get_frame] FAILED: No capture or not open")
             return None
         
         try:
-            ret, frame = self.capture.read()
-            
-            if ret and frame is not None:
-                # Konvertiere BGR zu RGB und dann zu PIL Image
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(frame_rgb)
-                return pil_image
+            # Use lock for thread-safe capture access
+            if self.capture_lock:
+                with self.capture_lock:
+                    ret, frame = self.capture.read()
+                    print(f"[get_frame] read result: ret={ret}, frame={'OK' if frame is not None else 'None'}")
+                    
+                    if ret and frame is not None:
+                        # Konvertiere BGR zu RGB und dann zu PIL Image
+                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        pil_image = Image.fromarray(frame_rgb)
+                        print(f"[get_frame] returning PIL image: {pil_image.size}")
+                        return pil_image
+                    else:
+                        logger.warning("Fehler beim Lesen des Frames")
+                        print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
+                        return None
             else:
-                logger.warning("Fehler beim Lesen des Frames")
-                return None
+                # No lock available, read anyway (less safe)
+                ret, frame = self.capture.read()
+                print(f"[get_frame] read result (no lock): ret={ret}, frame={'OK' if frame is not None else 'None'}")
             
         except Exception as e:
             logger.error(f"Fehler beim Abrufen des Frames: {e}")

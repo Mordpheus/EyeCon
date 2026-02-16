@@ -51,6 +51,8 @@ class RecordingWorker(QThread):
 # LEFT AREA - Navigation Sidebar with Icons
 # -------------------------------------------------
 class LeftArea(QWidget):
+    new_recording_clicked = Signal()  # Signal für "Neue Aufnahme" Button
+    
     def __init__(self):
         super().__init__()
         # Ensure stylesheets render background
@@ -145,6 +147,36 @@ class LeftArea(QWidget):
             "}"
         )
         lower_layout.addWidget(self.patient_name_display)
+
+        # === "Neue Aufnahme" Button ===
+        new_recording_layout = QHBoxLayout()
+        new_recording_layout.setContentsMargins(0, 0, 0, 0)
+        new_recording_layout.setSpacing(8)
+        
+        record_icon = QLabel("🎥")
+        record_icon.setStyleSheet("font-size: 18px;")
+        new_recording_layout.addWidget(record_icon)
+        
+        self.btn_new_recording = QPushButton("Neue Aufnahme")
+        self.btn_new_recording.setMinimumHeight(40)
+        self.btn_new_recording.setStyleSheet(
+            "QPushButton { "
+            "background-color: #44aa44; "
+            "color: white; "
+            "border: none; "
+            "border-radius: 4px; "
+            "padding: 8px; "
+            "font-weight: bold; "
+            "text-align: left; "
+            "font-size: 12px; "
+            "} "
+            "QPushButton:hover { "
+            "background-color: #55bb55; "
+            "}"
+        )
+        self.btn_new_recording.clicked.connect(self.new_recording_clicked.emit)
+        new_recording_layout.addWidget(self.btn_new_recording, 1)
+        lower_layout.addLayout(new_recording_layout)
 
         # === Recordings Section: Label + Dropdown ===
         # Displays all recordings for currently selected patient
@@ -313,6 +345,10 @@ class RecordingPlayerScreen(QWidget):
         # Use provided camera controller or create new one
         self.camera_controller = camera_controller if camera_controller else CameraController()
         self.is_recording = False
+        
+        # Patient info (set when navigating to recording screen)
+        self.current_patient_id = None
+        self.current_patient_display = "No patient selected"
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -841,6 +877,22 @@ class RecordingPlayerScreen(QWidget):
             # Convert slider position (0-1000) to milliseconds
             position_ms = int((value / 1000) * self.media_player.duration())
             self.media_player.setPosition(position_ms)
+    
+    def set_patient_info(self, patient_display: str, patient_id: str) -> None:
+        """
+        Set current patient info for recording.
+        
+        Called before showing recording screen so the recording knows
+        which patient it's being recorded for.
+        
+        Parameters:
+            patient_display (str): Formatted patient name "ID - Nachname, Vorname"
+            patient_id (str): Database patient ID
+        """
+        self.current_patient_id = patient_id
+        self.current_patient_display = patient_display
+        # Update info label to show which patient is being recorded
+        self.recording_info.setText(f"Patient: {patient_display}")
 
 
 # -------------------------------------------------
@@ -909,6 +961,7 @@ class SettingsScreen(QWidget):
         # Timer für Live-Camera-Feed
         self.camera_timer = QTimer()
         self.camera_timer.timeout.connect(self._update_camera_preview)
+        print(f"DEBUG: Camera timer created and connected")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -1079,8 +1132,10 @@ class SettingsScreen(QWidget):
         """)
     
     def _show_connected(self, port: str):
-        """Show connected status (placeholder for live camera feed)."""
-        self.camera_preview.setText(f"✓\n\n{port}\nverbunden")
+        """Show connected status - clear text and prepare for pixmap."""
+        # Clear text and prepare for live camera pixmap
+        self.camera_preview.setText("")
+        self.camera_preview.clear()
         self.camera_preview.setStyleSheet("""
             QLabel {
                 background-color: #e8f5e9;
@@ -1091,22 +1146,39 @@ class SettingsScreen(QWidget):
                 font-weight: bold;
             }
         """)
-        # TODO: Hier würde OpenCV Camera-Feed angezeigt
     
     def _update_camera_preview(self):
         """Update camera preview with live frame from USB-Webcam."""
-        frame = self.camera_controller.get_frame()
-        
-        if frame is None:
-            return
+        with open("debug_preview.log", "a") as f:
+            f.write(f"[_update_camera_preview] called, timer={self.camera_timer.isActive()}\n")
         
         try:
+            # DEBUG: Check if timer is running
+            if not self.camera_timer.isActive():
+                with open("debug_preview.log", "a") as f:
+                    f.write("WARNING: Timer is not active!\n")
+                print("WARNING: Timer is not active!")
+                return
+            
+            frame = self.camera_controller.get_frame()
+            
+            if frame is None:
+                # Frame-Fehler nur alle 30 calls loggieren um spam zu vermeiden
+                if not hasattr(self, '_frame_none_count'):
+                    self._frame_none_count = 0
+                self._frame_none_count += 1
+                if self._frame_none_count % 30 == 0:
+                    print(f"DEBUG: Frame is None (count: {self._frame_none_count})")
+                return
+            
+            self._frame_none_count = 0
+            print(f"DEBUG: Got frame, type={type(frame)}, size={frame.size if hasattr(frame, 'size') else 'no size'}")
+            
             # Frame ist ein PIL Image von USB-Webcam
             # Konvertiere zu QPixmap
             from io import BytesIO
-            
-            # PIL Image zu QPixmap (PPM Format für Qt)
             import io
+            
             buffer = BytesIO()
             frame.save(buffer, format="PPM")
             buffer.seek(0)
@@ -1115,39 +1187,326 @@ class SettingsScreen(QWidget):
             pixmap = QPixmap()
             pixmap.loadFromData(buffer.getvalue(), "PPM")
             
+            if pixmap.isNull():
+                print("WARNING: Pixmap is null after loading")
+                return
+            
+            print(f"DEBUG: Pixmap loaded successfully, size={pixmap.size()}")
+            
             # Skaliere auf Preview-Größe (150x150)
             scaled_pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)
             
-            # Zeige im Label
+            # Zeige im Label - WICHTIG: clear() zuerst um Text zu löschen
+            self.camera_preview.clear()
             self.camera_preview.setPixmap(scaled_pixmap)
             self.camera_preview.setAlignment(Qt.AlignCenter)
+            # print("DEBUG: Pixmap set to preview label")  # Don't spam this
             
         except Exception as e:
-            print(f"Fehler beim Update Camera Preview: {e}")
+            print(f"ERROR in _update_camera_preview: {e}")
+            with open("debug_preview.log", "a") as f:
+                import traceback
+                f.write(f"ERROR in _update_camera_preview: {e}\n")
+                f.write(traceback.format_exc())
+                f.write("\n")
+            import traceback
+            traceback.print_exc()
     
-    def _on_port_changed(self):
-        """Handle port dropdown change."""
-        self._update_status_display()
+    def _on_port_changed(self, index: int):
+        """Handle USB port selection change - ONLY show camera if LED test passes."""
+        import time
+        try:
+            if index <= 0:
+                # Placeholder selected - stop any live feed
+                try:
+                    if self.camera_timer.isActive():
+                        self.camera_timer.stop()
+                except:
+                    pass
+                self._show_no_signal()
+                self.status_text.setText("Port-Auswahl erforderlich")
+                return
+            
+            # Check if camera controller is available
+            if not self.camera_controller:
+                self.status_text.setText("✗ Fehler: Kamera-Controller nicht verfügbar")
+                self._show_no_signal()
+                return
+            
+            port = self.port_dropdown.currentData()
+            if not port:
+                self._show_no_signal()
+                return
+            
+            # Stop existing timer if running
+            try:
+                if self.camera_timer.isActive():
+                    self.camera_timer.stop()
+            except:
+                pass
+            
+            # Disconnect old connection
+            try:
+                self.camera_controller.disconnect_camera()
+            except:
+                pass
+            
+            time.sleep(0.2)
+            
+            # Set the port
+            self.camera_controller.serial_port = port
+            
+            # **CRITICAL: LED test MUST pass before showing anything**
+            try:
+                self.camera_controller.init_serial()
+                time.sleep(0.1)  # Wait for serial connection
+                
+                # Test LED toggle - this ONLY works on the correct port
+                led_test_passed = False
+                try:
+                    if self.camera_controller.led_on():
+                        time.sleep(0.05)
+                        self.camera_controller.led_off()
+                        led_test_passed = True
+                        print(f"[OK] LED test passed on {port}")
+                except Exception as e:
+                    print(f"[FAIL] LED test failed on {port}: {e}")
+                    led_test_passed = False
+                
+                # If LED test failed, STOP here - this is not the Raspberry Pi port
+                if not led_test_passed:
+                    self.status_text.setText(f"✗ Port {port}: Kein Videosignal (Raspberry Pi nicht erreichbar)")
+                    self._show_no_signal()
+                    return
+                
+            except Exception as e:
+                print(f"Error initializing serial on {port}: {e}")
+                self.status_text.setText(f"✗ Port {port}: Fehler bei Verbindung")
+                self._show_no_signal()
+                return
+            
+            # LED test passed! Now try to connect camera
+            cameras = []
+            try:
+                cameras = self.camera_controller.list_cameras()
+                print(f"DEBUG: Cameras found: {cameras}")
+            except Exception as e:
+                print(f"ERROR: Error listing cameras: {e}")
+                cameras = []
+            
+            if cameras:
+                # Try to connect to first camera
+                try:
+                    print(f"DEBUG: Attempting direct camera connection...")
+                    if self.camera_controller.connect_camera(0):
+                        print(f"DEBUG: Camera connected successfully")
+                        self._show_connected("USB Camera")
+                        # Start live preview (30 FPS)
+                        try:
+                            print(f"DEBUG: Starting camera timer...")
+                            with open("debug_preview.log", "a") as f:
+                                f.write(f"DEBUG: Starting camera timer...\n")
+                            
+                            # CRITICAL: Warm-up frame before timer starts
+                            import time
+                            time.sleep(0.05)
+                            warmup = self.camera_controller.get_frame()
+                            print(f"  [WARMUP] Primed: {warmup.size if warmup else 'FAILED'}")
+                            
+                            self.camera_timer.start(33)
+                            print(f"DEBUG: Timer started, interval=33ms")
+                            with open("debug_preview.log", "a") as f:
+                                f.write(f"DEBUG: Timer started, interval=33ms\n")
+                        except Exception as e:
+                            print(f"ERROR: Failed to start timer: {e}")
+                            with open("debug_preview.log", "a") as f:
+                                f.write(f"ERROR: Failed to start timer: {e}\n")
+                        
+                        self.status_text.setText(f"✓ Videosignal gefunden - Kamera verbunden")
+                        print(f"[OK] Connected to camera via {port}")
+                    else:
+                        print(f"DEBUG: connect_camera(0) returned False")
+                        self.status_text.setText(f"✗ Port {port}: Fehler bei der verbindung")
+                        self._show_no_signal()
+                except Exception as e:
+                    print(f"ERROR: connecting to camera: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    self.status_text.setText(f"✗ Port {port}: Fehler - {str(e)}")
+                    self._show_no_signal()
+            else:
+                # No cameras found (but LED test passed)
+                self.status_text.setText(f"✗ Port {port}: Keine USB-Kamera gefunden (LED OK)")
+                self._show_no_signal()
+                
+        except Exception as e:
+            print(f"Error in _on_port_changed: {e}")
+            self.status_text.setText(f"✗ Fehler beim Port-Wechsel: {str(e)}")
+            try:
+                self._show_no_signal()
+            except:
+                pass
+        
+        try:
+            self._update_status_display()
+        except:
+            pass
     
     def _on_scan_ports(self):
-        """Scan and detect available USB cameras."""
-        cameras = self.camera_controller.list_cameras()
-        if cameras:
-            # Versuche, zur ersten Kamera zu verbinden
-            if self.camera_controller.connect_camera(0):
-                self._show_connected("USB Camera")
-                # Starte Live-Feed Timer (30 FPS = 33ms)
-                self.camera_timer.start(33)
-                self.status_text.setText(f"✓ Kamera verbunden: {len(cameras)} Gerät(e) gefunden")
-                print(f"Kamera verbunden! Live-Feed läuft...")
-            else:
-                self.status_text.setText("✗ Fehler: Konnte nicht zur Kamera verbinden")
+        """Scan all ports and auto-connect to valid camera - LED test mandatory."""
+        import time
+        try:
+            # Stop existing timer
+            try:
+                if self.camera_timer.isActive():
+                    self.camera_timer.stop()
+            except:
+                pass
+            
+            # Disconnect old camera
+            try:
+                self.camera_controller.disconnect_camera()
+            except:
+                pass
+            
+            time.sleep(0.2)
+            
+            self.status_text.setText("Scanne Ports...")
+            
+            # Get available ports
+            ports = []
+            try:
+                import serial.tools.list_ports
+                ports = [port.device for port in serial.tools.list_ports.comports()]
+                print(f"Available COM ports: {ports}")
+            except Exception as e:
+                print(f"Error listing ports: {e}")
+                self.status_text.setText("Fehler beim Scannen der COM-Ports")
+                return
+            
+            if not ports:
+                self.status_text.setText("Keine COM-Ports gefunden")
                 self._show_no_signal()
-        else:
-            self.status_text.setText("✗ Keine USB-Kameras gefunden")
+                return
+            
+            # Try each port - LED test MANDATORY
+            found_valid_port = False
+            for port in ports:
+                try:
+                    print(f"\nScanning port: {port}")
+                    time.sleep(0.15)
+                    
+                    # Set port and disconnect any old connection first
+                    self.camera_controller.serial_port = port
+                    try:
+                        self.camera_controller.disconnect_serial()
+                    except:
+                        pass
+                    
+                    time.sleep(0.1)
+                    
+                    # Reconnect to new port
+                    try:
+                        self.camera_controller.init_serial()
+                    except Exception as e:
+                        print(f"  [->] Cannot initialize serial on {port}: {e}")
+                        continue
+                    
+                    time.sleep(0.1)
+                    
+                    # **LED test MANDATORY - only proceed if it passes**
+                    led_ok = False
+                    try:
+                        if self.camera_controller.led_on():
+                            time.sleep(0.05)
+                            self.camera_controller.led_off()
+                            led_ok = True
+                            print(f"  [OK] LED test PASSED on {port}")
+                    except Exception as e:
+                        print(f"  [FAIL] LED test failed on {port}: {e}")
+                    
+                    if not led_ok:
+                        print(f"  [-] Skipping {port} (LED test failed)")
+                        continue
+                    
+                    # LED passed! Now try to detect cameras via list_cameras()
+                    cameras = []
+                    try:
+                        cameras = self.camera_controller.list_cameras()
+                        print(f"  [-] Cameras on {port}: {cameras}")
+                    except Exception as e:
+                        print(f"  [-] Error listing cameras on {port}: {e}")
+                    
+                    if cameras:
+                        try:
+                            print(f"  DEBUG: Attempting to connect camera on {port}...")
+                            if self.camera_controller.connect_camera(0):
+                                print(f"  DEBUG: Camera connected on {port}")
+                                
+                                # DEBUG: Check if capture is really working BEFORE starting timer
+                                test_frame = self.camera_controller.get_frame()
+                                if test_frame is None:
+                                    print(f"  [WARN] get_frame() returned None immediately after connect_camera()")
+                                else:
+                                    print(f"  [OK] get_frame() works: {test_frame.size}")
+                                
+                                self._show_connected("USB Camera")
+                                try:
+                                    print(f"  DEBUG: Starting timer for {port}")
+                                    with open("debug_preview.log", "a") as f:
+                                        f.write(f"  DEBUG: Starting timer for {port}\n")
+                                    
+                                    # DEBUG: Test one more time BEFORE starting timer
+                                    test_frame2 = self.camera_controller.get_frame()
+                                    if test_frame2 is None:
+                                        print(f"  [ERROR] get_frame() FAILED immediately before timer.start()")
+                                    else:
+                                        print(f"  [OK] get_frame() STILL works before timer: {test_frame2.size}")
+                                    
+                                    # CRITICAL: Warm-up frame to prime the pump
+                                    # The first timer event often fails, so read a frame now  
+                                    import time
+                                    time.sleep(0.05)  # Brief delay
+                                    warmup = self.camera_controller.get_frame()
+                                    print(f"  [WARMUP] Primed: {warmup.size if warmup else 'FAILED'}")
+                                    
+                                    self.camera_timer.start(33)
+                                    print(f"  DEBUG: Timer started for {port}")
+                                    with open("debug_preview.log", "a") as f:
+                                        f.write(f"  DEBUG: Timer started for {port}\n")
+                                except Exception as te:
+                                    print(f"  ERROR: Failed to start timer: {te}")
+                                    with open("debug_preview.log", "a") as f:
+                                        f.write(f"  ERROR: Failed to start timer: {te}\n")
+                                
+                                self.status_text.setText(f"Videosignal gefunden - Kamera verbunden auf {port}")
+                                print(f"[OK] Camera connected on {port}")
+                                found_valid_port = True
+                                break
+                            else:
+                                print(f"  DEBUG: connect_camera(0) failed on {port}")
+                        except Exception as e:
+                            print(f"  [!] Error connecting camera on {port}: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    
+                except Exception as e:
+                    print(f"Error testing port {port}: {e}")
+                    continue
+            
+            if not found_valid_port:
+                self.status_text.setText("Keine gueltige Kamera gefunden (LED-Test fehlgeschlagen)")
+                self._show_no_signal()
+                
+        except Exception as e:
+            print(f"Error in _on_scan_ports: {e}")
+            self.status_text.setText(f"Fehler beim Port-Scan: {str(e)}")
             self._show_no_signal()
         
-        self._update_status_display()
+        try:
+            self._update_status_display()
+        except:
+            pass
     
     def _on_led_on(self):
         """Turn LED on."""
@@ -1170,18 +1529,6 @@ class SettingsScreen(QWidget):
             self.status_text.setText("✗ LED Error: Failed to turn LED off. Check serial connection.")
             print("Failed to turn LED off")
         self._update_status_display()
-    def _on_port_changed(self, index: int):
-        """Handle USB port selection change."""
-        if index <= 0:
-            self._show_no_signal()
-            return
-        
-        port = self.port_dropdown.currentData()
-        if port:
-            # Placeholder: Versuche Camera zu öffnen (später mit OpenCV)
-            self._show_connected(port)
-        else:
-            self._show_no_signal()
 
 
 # -------------------------------------------------
@@ -1277,13 +1624,14 @@ class CenterArea(QWidget):
         # Fetch patient data from database
         patient = self.manager.get_patient(patient_id)
         if patient:
-            # Format patient display: Show patient ID (self-documenting)
-            # ID format: XXXX-YYYY-MM-DD-G includes birthdate and gender
-            patient_name = patient['id']
+            # Format patient display: "ID - Nachname, Vorname"
+            first_name = patient.get('first_name', '')
+            last_name = patient.get('last_name', '')
+            patient_display = f"{patient['id']} - {last_name}, {first_name}"
             
             # Update sidebar patient display and load recordings
             # Pass patient_id to trigger recordings update in LeftArea
-            self.parent().left.set_selected_patient(patient_name, patient_id)
+            self.parent().left.set_selected_patient(patient_display, patient_id)
             
             # Fetch all recordings for this patient from database
             recordings = self.manager.get_recordings(patient_id)
@@ -1297,25 +1645,68 @@ class CenterArea(QWidget):
         
         Opens dialog for new patient data entry.
         On acceptance, creates patient in database and adds to list.
+        Handles success with confirmation message and error with retry option.
         """
-        # Open create patient dialog
-        dlg = CreatePatientDialog(self)
-        if dlg.exec() == QDialog.Accepted:
-            data = dlg.get_patient_data()
-            if data:
-                # Create new patient in database with v2.0 schema
-                # patient_id is auto-generated in format: XXXX-YYYY-MM-DD-G
-                patient_id = self.manager.create_patient(
-                    first_name=data.get("first_name", ""),
-                    last_name=data.get("last_name", ""),
-                    birthdate=data["birthdate"],
-                    sex=data["sex"]
-                )
-                # Fetch patient from database (includes auto-generated ID)
-                patient = self.manager.get_patient(patient_id)
-                if patient:
-                    # Add to patient list UI
-                    self.patient_list.add_patient(patient)
+        while True:  # Loop to allow retry from error dialog
+            # Open create patient dialog
+            dlg = CreatePatientDialog(self)
+            if dlg.exec() == QDialog.Accepted:
+                data = dlg.get_patient_data()
+                if data:
+                    try:
+                        # Create new patient in database with v2.0 schema
+                        patient_id = self.manager.create_patient(
+                            first_name=data.get("first_name", ""),
+                            last_name=data.get("last_name", ""),
+                            birthdate=data["birthdate"],
+                            sex=data["sex"]
+                        )
+                        
+                        # Fetch patient from database (includes auto-generated ID)
+                        patient = self.manager.get_patient(patient_id)
+                        if patient:
+                            # Add to patient list UI
+                            self.patient_list.add_patient(patient)
+                            
+                            # === SUCCESS DIALOG ===
+                            success_msg = f"""Patient erfolgreich erstellt!
+
+Vorname: {data.get("first_name")}
+Nachname: {data.get("last_name")}
+Patienten-ID: {patient_id}
+
+Die Patient-ID wurde automatisch generiert."""
+                            QMessageBox.information(self, "Erfolg", success_msg)
+                            break  # Exit loop on success
+                    
+                    except ValueError as e:
+                        # Validation error (empty names, etc.)
+                        error_msg = f"Fehler bei Patient-Erstellung:\n\n{str(e)}"
+                        QMessageBox.critical(self, "Fehler", error_msg)
+                        # Loop continues, user can retry
+                    
+                    except Exception as e:
+                        # Database or other error
+                        error_msg = f"""Fehler beim Speichern des Patienten:
+
+{str(e)}
+
+Möchten Sie erneut versuchen?"""
+                        
+                        result = QMessageBox.warning(
+                            self,
+                            "Fehler bei der Erstellung",
+                            error_msg,
+                            QMessageBox.Retry | QMessageBox.Cancel,
+                            QMessageBox.Retry
+                        )
+                        
+                        if result == QMessageBox.Cancel:
+                            break  # Exit loop, return to patient list
+                        # If Retry, loop continues to show dialog again
+            else:
+                # User cancelled the dialog
+                break  # Exit loop, return to patient list
 
     def _on_delete_clicked(self) -> None:
         """
@@ -1350,23 +1741,52 @@ class CenterArea(QWidget):
         """
         Handle edit patient button click.
         
-        Shows read-only patient information dialog (v2.0: patient IDs are immutable).
-        Patient data cannot be edited after creation.
+        Opens patient edit dialog where name, birthdate, and gender can be modified.
+        Changes are saved to database immediately.
         """
         # Check if patient is selected
         if self.selected_patient_id is None:
-            QMessageBox.information(self, "Info", "No patient selected.")
+            QMessageBox.information(self, "Info", "Kein Patient ausgewählt.")
             return
         
         # Fetch patient from database
         patient = self.manager.get_patient(self.selected_patient_id)
         if not patient:
-            QMessageBox.warning(self, "Error", "Patient not found.")
+            QMessageBox.warning(self, "Fehler", "Patient nicht gefunden.")
             return
         
-        # Open patient information dialog (read-only)
+        # Ensure patient ID is in the dict (failsafe)
+        if 'id' not in patient or not patient['id']:
+            patient['id'] = self.selected_patient_id
+        
+        # Open patient edit dialog
         dlg = EditPatientDialog(self, patient_data=patient)
-        dlg.exec()
+        if dlg.exec() == QDialog.Accepted:
+            # Get updated data
+            updated_data = dlg.get_patient_data()
+            
+            try:
+                # Update patient in database
+                success = self.manager.update_patient(
+                    patient_id=updated_data['id'],
+                    first_name=updated_data['first_name'],
+                    last_name=updated_data['last_name'],
+                    birthdate=updated_data['birthdate'],
+                    sex=updated_data['sex']
+                )
+                
+                if success:
+                    # Refresh patient list to show updated data
+                    self.refresh_patient_list()
+                    QMessageBox.information(self, "Erfolg", "Patient erfolgreich aktualisiert!")
+                else:
+                    QMessageBox.warning(self, "Warnung", "Patient konnte nicht aktualisiert werden.")
+            
+            except ValueError as e:
+                QMessageBox.critical(self, "Fehler", f"Validierungsfehler:\n\n{str(e)}")
+            
+            except Exception as e:
+                QMessageBox.critical(self, "Fehler", f"Fehler beim Aktualisieren:\n\n{str(e)}")
     
     def _on_recording_back_clicked(self) -> None:
         """
@@ -1375,6 +1795,44 @@ class CenterArea(QWidget):
         Switch back to patient list view.
         """
         self.stacked_widget.setCurrentIndex(0)  # Show patient list screen
+    
+    def _on_new_recording_clicked(self) -> None:
+        """
+        Handle 'Neue Aufnahme' button click from sidebar.
+        
+        Navigates to recording screen for the currently selected patient.
+        If no patient is selected, shows an error message.
+        """
+        if not self.selected_patient_id:
+            QMessageBox.warning(self, "Fehler", "Bitte wählen Sie zuerst einen Patienten aus.")
+            return
+        
+        # Get patient data to display name
+        patient = self.manager.get_patient(self.selected_patient_id)
+        if patient:
+            first_name = patient.get('first_name', '')
+            last_name = patient.get('last_name', '')
+            patient_display = f"{patient['id']} - {last_name}, {first_name}"
+            
+            # Set patient info on recording screen and navigate to it
+            self.recording_player.set_patient_info(patient_display, self.selected_patient_id)
+            self.stacked_widget.setCurrentIndex(1)  # Show recording screen
+        else:
+            QMessageBox.warning(self, "Fehler", "Patient konnte nicht geladen werden.")
+
+    def refresh_patient_list(self) -> None:
+        """
+        Refresh patient list display by reloading from database.
+        
+        This is called after updating patient data to ensure UI shows latest changes.
+        """
+        # Clear current list
+        self.patient_list.clear_patients()
+        
+        # Reload all patients from database
+        all_patients = self.manager.get_all_patients()
+        for patient in all_patients:
+            self.patient_list.add_patient(patient)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -1451,6 +1909,10 @@ class AppLayout(QWidget):
         # Recording Selection (LeftArea) → Recording Player (CenterArea)
         # When user selects a recording from dropdown, show recording player
         self.left.recordings_dropdown.currentIndexChanged.connect(self._on_recording_selected)
+        
+        # New Recording Button (LeftArea) → Recording screen (CenterArea)
+        # When user clicks "Neue Aufnahme", navigate to recording screen
+        self.left.new_recording_clicked.connect(self.center._on_new_recording_clicked)
         
         # Settings Button → Settings Screen
         self.left.btn_settings.clicked.connect(self._on_settings_clicked)

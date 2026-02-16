@@ -92,13 +92,14 @@ class PatientDataManager:
 
         # === SCHEMA v2.0: Patient Table ===
         # Patient ID: TEXT format XXXX-YYYY-MM-DD-G (UUID prefix + Birthdate + Gender)
-        # Stores: first_name, last_name, birthdate, sex
+        # Stores: first_name, last_name (required), birthdate, sex
+        # NOTE: Names are NOT used in ID generation but are REQUIRED fields
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS patient (
                 id TEXT PRIMARY KEY,
-                first_name TEXT,
-                last_name TEXT,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
                 birthdate TEXT NOT NULL,
                 sex TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -125,7 +126,8 @@ class PatientDataManager:
 
         # Delete old test data if exists (user requested deletion)
         # This removes the 11 test recordings and their patients
-        if not first_time:
+        # ONLY on first run when setting up fresh database
+        if first_time:
             try:
                 cur.execute("DELETE FROM recording")
                 cur.execute("DELETE FROM patient")
@@ -137,15 +139,28 @@ class PatientDataManager:
         """
         Create new patient record with auto-generated ID.
         
+        IMPORTANT: first_name and last_name are REQUIRED (not optional)
+        Names are stored separately and not used in ID generation.
+        Patient ID is generated from: birthdate + sex only
+        
         Args:
             birthdate: Patient birthdate in format YYYY-MM-DD or DD.MM.YYYY
             sex: Single character gender: M (male), W (female), D (diverse)
-            first_name: Optional first name
-            last_name: Optional last name
+            first_name: Patient first name (REQUIRED - must not be empty)
+            last_name: Patient last name (REQUIRED - must not be empty)
         
         Returns:
             Generated patient ID in format XXXX-YYYY-MM-DD-G
+            
+        Raises:
+            ValueError: If first_name or last_name is empty
         """
+        # Validate that names are provided (not empty)
+        if not first_name or not first_name.strip():
+            raise ValueError("First name is required and cannot be empty")
+        if not last_name or not last_name.strip():
+            raise ValueError("Last name is required and cannot be empty")
+        
         # Generate patient ID
         patient_id = self.generate_patient_id(birthdate, sex)
         
@@ -173,11 +188,93 @@ class PatientDataManager:
         return [dict(row) for row in rows]
 
     def get_patient(self, patient_id: str) -> Dict[str, Any] | None:
-        """Retrieve single patient by ID."""
+        """
+        Retrieve single patient by ID.
+        
+        Returns all patient data including: id, first_name, last_name, birthdate, sex, created_at
+        """
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM patient WHERE id = ?", (patient_id,))
         row = cur.fetchone()
-        return dict(row) if row else None
+        if row:
+            patient_dict = dict(row)
+            # Ensure 'id' field is present (primary key)
+            if 'id' not in patient_dict:
+                patient_dict['id'] = patient_id
+            return patient_dict
+        return None
+
+    def update_patient(self, patient_id: str, first_name: str = None, last_name: str = None, 
+                      birthdate: str = None, sex: str = None) -> bool:
+        """
+        Update patient data.
+        
+        Patient ID is immutable (contains birthdate and gender).
+        Only first_name, last_name, birthdate, and sex can be updated.
+        
+        Args:
+            patient_id: Patient ID (not changeable)
+            first_name: New first name (optional, if None then not updated)
+            last_name: New last name (optional, if None then not updated)
+            birthdate: New birthdate (optional, if None then not updated)
+            sex: New gender (optional, if None then not updated)
+        
+        Returns:
+            True if update successful, False otherwise
+            
+        Raises:
+            ValueError: If trying to update with empty names
+        """
+        # Validate non-empty fields
+        if first_name is not None and not first_name.strip():
+            raise ValueError("First name cannot be empty")
+        if last_name is not None and not last_name.strip():
+            raise ValueError("Last name cannot be empty")
+        
+        # Build dynamic UPDATE query based on what's being updated
+        update_fields = []
+        values = []
+        
+        if first_name is not None:
+            update_fields.append("first_name = ?")
+            values.append(first_name.strip())
+        
+        if last_name is not None:
+            update_fields.append("last_name = ?")
+            values.append(last_name.strip())
+        
+        if birthdate is not None:
+            # Normalize birthdate to YYYY-MM-DD format
+            if '.' in birthdate:
+                parts = birthdate.split('.')
+                if len(parts) == 3:
+                    birthdate = f"{parts[2]}-{parts[1]}-{parts[0]}"
+            update_fields.append("birthdate = ?")
+            values.append(birthdate)
+        
+        if sex is not None:
+            if sex not in ['M', 'W', 'D']:
+                sex = 'D'
+            update_fields.append("sex = ?")
+            values.append(sex)
+        
+        # If no fields to update, return early
+        if not update_fields:
+            return True
+        
+        # Add patient ID to values for WHERE clause
+        values.append(patient_id)
+        
+        # Execute update
+        try:
+            cur = self.conn.cursor()
+            query = f"UPDATE patient SET {', '.join(update_fields)} WHERE id = ?"
+            cur.execute(query, values)
+            self.conn.commit()
+            return cur.rowcount > 0
+        except Exception as e:
+            print(f"Error updating patient: {e}")
+            return False
 
     def patient_exists(self, patient_id: str) -> bool:
         """Check if patient with given ID exists."""

@@ -327,16 +327,17 @@ class CreatePatientDialog(QDialog):
     
     Database schema v2.0:
     - Patient ID is auto-generated (UUID + birthdate + gender)
-    - Database stores only: birthdate, sex (no names in DB)
+    - Database stores: first_name, last_name (REQUIRED), birthdate, sex
+    - Names are NOT used in ID generation but ARE essential fields
     
-    UI Input:
-    - First name and last name (optional, for reference/display)
+    UI Input (all required):
+    - First name (required)
+    - Last name (required)
     - Birthdate (required, via QDateEdit calendar picker)
     - Gender (required, M/W/D via QComboBox)
     
     Returns:
-    - To database: {birthdate, sex}
-    - Optional: {first_name, last_name} (not stored in DB v2.0, but can be logged)
+    - {first_name, last_name, birthdate, sex} all REQUIRED
     
     Usage:
         dialog = CreatePatientDialog(parent_widget)
@@ -344,6 +345,8 @@ class CreatePatientDialog(QDialog):
             patient_data = dialog.get_patient_data()
             if patient_data:
                 patient_id = db_manager.create_patient(
+                    first_name=patient_data["first_name"],
+                    last_name=patient_data["last_name"],
                     birthdate=patient_data["birthdate"],
                     sex=patient_data["sex"]
                 )
@@ -361,20 +364,20 @@ class CreatePatientDialog(QDialog):
         # Main layout
         layout = QVBoxLayout()
         
-        # === First Name ===
-        layout.addWidget(QLabel("Vorname:"))
+        # === First Name (REQUIRED) ===
+        layout.addWidget(QLabel("Vorname: *"))
         self.first_name_input = QLineEdit()
-        self.first_name_input.setPlaceholderText("(optional)")
+        self.first_name_input.setPlaceholderText("Vorname eingeben (erforderlich)")
         layout.addWidget(self.first_name_input)
         
-        # === Last Name ===
-        layout.addWidget(QLabel("Nachname:"))
+        # === Last Name (REQUIRED) ===
+        layout.addWidget(QLabel("Nachname: *"))
         self.last_name_input = QLineEdit()
-        self.last_name_input.setPlaceholderText("(optional)")
+        self.last_name_input.setPlaceholderText("Nachname eingeben (erforderlich)")
         layout.addWidget(self.last_name_input)
         
         # === Birthdate Picker ===
-        layout.addWidget(QLabel("Geburtsdatum:"))
+        layout.addWidget(QLabel("Geburtsdatum: *"))
         self.date_edit = QDateEdit()
         self.date_edit.setCalendarPopup(True)  # Opens calendar on click
         self.date_edit.setDate(QDate(1990, 1, 1))  # Default date
@@ -382,7 +385,7 @@ class CreatePatientDialog(QDialog):
         layout.addWidget(self.date_edit)
         
         # === Gender Selector ===
-        layout.addWidget(QLabel("Geschlecht:"))
+        layout.addWidget(QLabel("Geschlecht: *"))
         self.gender_combo = QComboBox()
         self.gender_combo.addItems(["M (Männlich)", "W (Weiblich)", "D (Divers)"])
         layout.addWidget(self.gender_combo)
@@ -393,7 +396,7 @@ class CreatePatientDialog(QDialog):
         button_layout = QHBoxLayout()
         
         create_btn = QPushButton("Erstellen")
-        create_btn.clicked.connect(self.accept)
+        create_btn.clicked.connect(self.on_create_clicked)
         button_layout.addWidget(create_btn)
         
         cancel_btn = QPushButton("Abbrechen")
@@ -403,19 +406,33 @@ class CreatePatientDialog(QDialog):
         layout.addLayout(button_layout)
         self.setLayout(layout)
     
+    def on_create_clicked(self):
+        """Validate form data before accepting dialog."""
+        first_name = self.first_name_input.text().strip()
+        last_name = self.last_name_input.text().strip()
+        
+        if not first_name:
+            QMessageBox.warning(self, "Fehler", "Vorname ist erforderlich!")
+            return
+        
+        if not last_name:
+            QMessageBox.warning(self, "Fehler", "Nachname ist erforderlich!")
+            return
+        
+        self.accept()
+    
     def get_patient_data(self) -> dict | None:
         """
         Return patient data from form.
         
-        Note: v2.0 schema only stores birthdate and sex in database.
-        Names are returned but not stored (can be used for UI/logging).
+        All fields are REQUIRED and stored in database v2.0:
+        - first_name: Required, stored in DB
+        - last_name: Required, stored in DB
+        - birthdate: Required, stored in DB (for ID generation and records)
+        - sex: Required, stored in DB (for ID generation)
         
         Returns:
-            Dict with:
-            - birthdate: str (YYYY-MM-DD) - STORED in DB
-            - sex: str (M/W/D) - STORED in DB
-            - first_name: str (optional) - NOT stored in DB v2.0
-            - last_name: str (optional) - NOT stored in DB v2.0
+            Dict with: {first_name, last_name, birthdate, sex}
         """
         # Extract date from QDateEdit
         qdate = self.date_edit.date()
@@ -425,7 +442,7 @@ class CreatePatientDialog(QDialog):
         gender_text = self.gender_combo.currentText()
         sex = gender_text[0]  # Take first character (M, W, or D)
         
-        # Return data (names not stored in v2.0 DB, but included for reference)
+        # Return data (all fields populated and required)
         return {
             "first_name": self.first_name_input.text().strip(),
             "last_name": self.last_name_input.text().strip(),
@@ -436,53 +453,141 @@ class CreatePatientDialog(QDialog):
 
 class EditPatientDialog(QDialog):
     """
-    Display patient information dialog (read-only for v2.0 schema).
+    Edit patient information dialog for v2.0 schema.
     
-    Patient IDs are immutable (format: XXXX-YYYY-MM-DD-G contains birthdate + gender).
-    Therefore, editing is not allowed. This dialog displays patient information only.
+    Allows editing of: first_name, last_name, birthdate, sex
+    Patient ID is immutable (format: XXXX-YYYY-MM-DD-G contains birthdate + gender).
+    
+    Usage:
+        dialog = EditPatientDialog(parent, patient_data=patient_dict)
+        if dialog.exec() == QDialog.Accepted:
+            updated_data = dialog.get_patient_data()
+            db_manager.update_patient(
+                patient_id=updated_data['id'],
+                first_name=updated_data['first_name'],
+                last_name=updated_data['last_name'],
+                birthdate=updated_data['birthdate'],
+                sex=updated_data['sex']
+            )
     """
     def __init__(self, parent=None, patient_data: Dict[str, Any] | None = None):
         super().__init__(parent)
         self.patient_data = patient_data or {}
+        self.original_data = dict(self.patient_data)  # Keep copy for comparison
 
-        self.setWindowTitle("Patient Information")
+        self.setWindowTitle("Patient bearbeiten")
         self.setModal(True)
-        self.setMinimumWidth(450)
+        self.setMinimumWidth(500)
 
         layout = QVBoxLayout()
 
-        # Patient ID (immutable, contains birthdate + gender)
-        layout.addWidget(QLabel("Patient ID:"))
-        id_label = QLabel(self.patient_data.get("id", ""))
-        id_label.setStyleSheet("font-weight: bold; font-family: courier; font-size: 12pt;")
+        # === Patient ID (IMMUTABLE - Display only) ===
+        layout.addWidget(QLabel("Patienten-ID (unveränderlich):"))
+        patient_id = str(self.patient_data.get("id", "(nicht verfügbar)"))
+        id_label = QLabel(patient_id)
+        id_label.setStyleSheet("font-weight: bold; font-family: Courier New; font-size: 10pt; color: #333333;")
         layout.addWidget(id_label)
 
-        # Birthdate (read-only, extracted from ID)
-        layout.addWidget(QLabel("Birthdate:"))
-        birthdate = self.patient_data.get("birthdate", "")
-        layout.addWidget(QLabel(birthdate))
+        layout.addSpacing(10)
 
-        # Gender (read-only, extracted from ID)
-        layout.addWidget(QLabel("Gender:"))
-        sex_code = self.patient_data.get("sex", "")
-        sex_display = {"M": "Male", "W": "Female", "D": "Diverse"}
-        sex_label = QLabel(sex_display.get(sex_code, sex_code))
-        layout.addWidget(sex_label)
+        # === First Name (EDITABLE) ===
+        layout.addWidget(QLabel("Vorname: *"))
+        self.first_name_input = QLineEdit()
+        self.first_name_input.setText(self.patient_data.get("first_name", ""))
+        layout.addWidget(self.first_name_input)
+
+        # === Last Name (EDITABLE) ===
+        layout.addWidget(QLabel("Nachname: *"))
+        self.last_name_input = QLineEdit()
+        self.last_name_input.setText(self.patient_data.get("last_name", ""))
+        layout.addWidget(self.last_name_input)
+
+        # === Birthdate (EDITABLE) ===
+        layout.addWidget(QLabel("Geburtsdatum: *"))
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("dd.MM.yyyy")
+        
+        # Parse birthdate from patient data
+        birthdate_str = self.patient_data.get("birthdate", "1990-01-01")
+        try:
+            qdate = QDate.fromString(birthdate_str, "yyyy-MM-dd")
+            if qdate.isValid():
+                self.date_edit.setDate(qdate)
+            else:
+                self.date_edit.setDate(QDate(1990, 1, 1))
+        except:
+            self.date_edit.setDate(QDate(1990, 1, 1))
+        
+        layout.addWidget(self.date_edit)
+
+        # === Gender (EDITABLE) ===
+        layout.addWidget(QLabel("Geschlecht: *"))
+        self.gender_combo = QComboBox()
+        self.gender_combo.addItems(["M (Männlich)", "W (Weiblich)", "D (Divers)"])
+        
+        # Set current gender from patient data
+        sex_code = self.patient_data.get("sex", "D")
+        sex_index = {"M": 0, "W": 1, "D": 2}.get(sex_code, 2)
+        self.gender_combo.setCurrentIndex(sex_index)
+        
+        layout.addWidget(self.gender_combo)
 
         layout.addSpacing(20)
-        layout.addWidget(QLabel("Patient data is immutable (ID includes birthdate and gender)."))
-        layout.addSpacing(20)
+        layout.addWidget(QLabel("* Erforderliche Felder"))
+        layout.addStretch()
 
-        # Close button
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.accept)
-        layout.addWidget(close_btn)
-
+        # === Dialog Buttons ===
+        button_layout = QHBoxLayout()
+        
+        save_btn = QPushButton("Speichern")
+        save_btn.clicked.connect(self.on_save_clicked)
+        button_layout.addWidget(save_btn)
+        
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
         self.setLayout(layout)
-
-    def get_patient_data(self) -> Dict[str, str]:
-        """Return patient data (read-only, no changes made)."""
-        return self.patient_data 
+    
+    def on_save_clicked(self):
+        """Validate form and accept if valid."""
+        first_name = self.first_name_input.text().strip()
+        last_name = self.last_name_input.text().strip()
+        
+        if not first_name:
+            QMessageBox.warning(self, "Fehler", "Vorname ist erforderlich!")
+            return
+        
+        if not last_name:
+            QMessageBox.warning(self, "Fehler", "Nachname ist erforderlich!")
+            return
+        
+        self.accept()
+    
+    def get_patient_data(self) -> Dict[str, Any]:
+        """
+        Return edited patient data.
+        
+        Returns:
+            Dict with: {id, first_name, last_name, birthdate, sex}
+        """
+        # Extract gender code from combo box (format: "M (Männlich)" → "M")
+        gender_text = self.gender_combo.currentText()
+        sex = gender_text[0]  # Take first character
+        
+        # Extract date from QDateEdit
+        qdate = self.date_edit.date()
+        birthdate = qdate.toString("yyyy-MM-dd")
+        
+        return {
+            "id": self.patient_data.get("id", ""),
+            "first_name": self.first_name_input.text().strip(),
+            "last_name": self.last_name_input.text().strip(),
+            "birthdate": birthdate,
+            "sex": sex
+        } 
 
 
 class DeleteConfirmDialog(QDialog):

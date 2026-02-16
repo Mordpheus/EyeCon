@@ -52,6 +52,7 @@ class RecordingWorker(QThread):
 # -------------------------------------------------
 class LeftArea(QWidget):
     new_recording_clicked = Signal()  # Signal für "Neue Aufnahme" Button
+    patients_clicked = Signal()  # Signal für "Patients" Button
     
     def __init__(self):
         super().__init__()
@@ -74,10 +75,11 @@ class LeftArea(QWidget):
         patients_layout = QHBoxLayout()
         patients_icon = QLabel("👥")
         patients_icon.setStyleSheet("font-size: 28px;")
-        patients_btn = QPushButton("Patients")
-        patients_btn.setMinimumHeight(50)
+        self.btn_patients = QPushButton("Patients")
+        self.btn_patients.setMinimumHeight(50)
+        self.btn_patients.clicked.connect(self.patients_clicked.emit)
         patients_layout.addWidget(patients_icon)
-        patients_layout.addWidget(patients_btn, 1)
+        patients_layout.addWidget(self.btn_patients, 1)
         patients_layout.setContentsMargins(0, 0, 0, 0)
         upper_layout.addLayout(patients_layout)
 
@@ -1929,6 +1931,10 @@ class AppLayout(QWidget):
         layout.addWidget(self.right)
         
         # === Signal connections ===
+        # Patients Button (LeftArea) → Patient List Screen (CenterArea)
+        # When user clicks "Patients" button, navigate to patient list screen
+        self.left.patients_clicked.connect(self._on_patients_clicked)
+        
         # Import Button (LeftArea) → Import handler (CenterArea)
         # When user clicks "Import Data" button, trigger TBI_Headset import workflow
         self.left.btn_import.clicked.connect(self._on_import_clicked)
@@ -2007,6 +2013,10 @@ class AppLayout(QWidget):
     def _on_help_clicked(self) -> None:
         """Show Help screen."""
         self.center.stacked_widget.setCurrentIndex(2)
+    
+    def _on_patients_clicked(self) -> None:
+        """Show Patient List screen."""
+        self.center.stacked_widget.setCurrentIndex(0)
     
     def _on_settings_clicked(self) -> None:
         """Show Settings screen."""

@@ -278,6 +278,9 @@ class LeftArea(QWidget):
         # Clear all existing items from dropdown
         self.recordings_dropdown.clear()
         
+        # Add placeholder
+        self.recordings_dropdown.addItem("-- Select a recording --")
+        
         # If no recordings, show placeholder and disable
         if not recordings:
             self.recordings_dropdown.addItem("-- No recordings --")
@@ -285,7 +288,7 @@ class LeftArea(QWidget):
             return
         
         # Add each recording to dropdown with formatted display text
-        for rec in recordings:
+        for idx, rec in enumerate(recordings):
             # Extract recording ID and timestamp
             rec_id = rec.get("id", "Unknown")
             date_unix = rec.get("date", 0)
@@ -322,6 +325,9 @@ class LeftArea(QWidget):
         
         # Enable dropdown now that recordings are available
         self.recordings_dropdown.setEnabled(True)
+        
+        # Auto-select first recording (index 1, since 0 is placeholder)
+        self.recordings_dropdown.setCurrentIndex(1)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -376,15 +382,38 @@ class RecordingPlayerScreen(QWidget):
         self.recording_info.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
         layout.addWidget(self.recording_info)
         
-        # === Video Player with QMediaPlayer ===
+        # === Video Display Container (Stacked: Playback OR Live Preview) ===
+        self.video_stack = QStackedWidget()
+        self.video_stack.setMinimumHeight(400)
+        
+        # Stack Index 0: QMediaPlayer for playback
         self.video_widget = QVideoWidget()
         self.video_widget.setStyleSheet("background-color: #000000;")
-        self.video_widget.setMinimumHeight(400)
-        layout.addWidget(self.video_widget, 1)
+        self.video_stack.addWidget(self.video_widget)
+        
+        # Stack Index 1: QLabel for live recording preview
+        self.preview_label_widget = QWidget()
+        self.preview_label_widget.setStyleSheet("background-color: #000000;")
+        preview_layout = QVBoxLayout(self.preview_label_widget)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.preview_label = QLabel()
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setStyleSheet("background-color: #000000;")
+        preview_layout.addWidget(self.preview_label)
+        
+        self.video_stack.addWidget(self.preview_label_widget)
+        self.video_stack.setCurrentIndex(0)  # Start with video player
+        
+        layout.addWidget(self.video_stack, 1)
         
         # === Media Player ===
         self.media_player = QMediaPlayer(self)
         self.media_player.setVideoOutput(self.video_widget)
+        
+        # === Preview Timer for live recording preview ===
+        self.preview_timer = QTimer()
+        self.preview_timer.timeout.connect(self._on_preview_timer)
         
         # === VIDEO TIMELINE ===
         timeline_layout = QHBoxLayout()
@@ -526,6 +555,12 @@ class RecordingPlayerScreen(QWidget):
                 border: 1px solid #555;
             }
         """)
+        # Connect list selection to playback (use itemClicked not currentItemChanged)
+        try:
+            self.recording_list.itemClicked.connect(self._on_recording_selected)
+            print(f"[RecordingPlayerScreen] itemClicked signal connected successfully")
+        except Exception as e:
+            print(f"[RecordingPlayerScreen] ERROR connecting itemClicked: {e}")
         recording_select_layout.addWidget(self.recording_list)
         plots_layout.addWidget(self.recording_select_widget, 1)
         
@@ -600,13 +635,112 @@ class RecordingPlayerScreen(QWidget):
         # === Populate Plots ===
         self._update_plots(recording)
     
+    def _on_recording_selected(self, item: QListWidgetItem) -> None:
+        """Handle recording selection from list."""
+        print(f"[RecordingPlayerScreen] _on_recording_selected called: item={item}")
+        if not item:
+            print(f"[RecordingPlayerScreen] item is None, returning")
+            return
+        rec = item.data(Qt.UserRole)
+        current_index = self.recording_list.row(item)
+        if rec:
+            print(f"[RecordingPlayerScreen] Recording selected: index={current_index}, id={rec.get('id')}")
+            self.set_recording(rec)
+        else:
+            print(f"[RecordingPlayerScreen] WARNING: No recording data in item at index {current_index}")
+    
+    def _refresh_recordings_list(self) -> None:
+        """Refresh the recordings list from database/filesystem."""
+        try:
+            if not self.manager or not self.current_patient_id:
+                print("[RecordingPlayerScreen] Manager or patient_id not set")
+                return
+            
+            # Disconnect old signal before clearing list
+            try:
+                self.recording_list.itemClicked.disconnect()
+            except:
+                pass
+            
+            # Get recordings from database
+            recordings = self.manager.get_recordings(self.current_patient_id)
+            
+            # Clear list
+            self.recording_list.clear()
+            
+            # Filter valid recordings (file exists) and sort by date (newest first)
+            valid_recordings = []
+            for rec in recordings:
+                rec_path = rec.get('id', '')
+                if rec_path and Path(rec_path).exists():
+                    valid_recordings.append(rec)
+                else:
+                    print(f"[RecordingPlayerScreen] Skipping invalid recording: {rec_path}")
+            
+            # Sort by date (newest first)
+            valid_recordings.sort(key=lambda r: r.get('date', 0), reverse=True)
+            
+            # Populate list
+            for idx, rec in enumerate(valid_recordings):
+                rec_id = rec.get('id', 'Unknown')
+                rec_date = rec.get('date', 0)
+                is_baseline = rec.get('baseline', 0)
+                print(f"[RecordingPlayerScreen] List item {idx}: id={rec_id}, date={rec_date}")
+                
+                # Extract filename
+                if "/" in str(rec_id):
+                    display_name = str(rec_id).split("/")[-1]
+                elif "\\" in str(rec_id):
+                    display_name = str(rec_id).split("\\")[-1]
+                else:
+                    display_name = str(rec_id)
+                
+                # Format date
+                if rec_date and rec_date > 0:
+                    try:
+                        date_str = datetime.fromtimestamp(rec_date).strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        date_str = "(no date)"
+                else:
+                    date_str = "(no date)"
+                
+                # Create item
+                baseline_label = "✓ [BASELINE]" if is_baseline else ""
+                item_text = f"{display_name} - {date_str} {baseline_label}".strip()
+                item = QListWidgetItem(item_text)
+                
+                print(f"[RecordingPlayerScreen]   Storing in item: rec_id={rec.get('id')}")
+                item.setData(Qt.UserRole, rec)  # Store full recording dict
+                item.setForeground(QColor('white'))
+                
+                if is_baseline:
+                    item.setBackground(QColor('#1a4a1a'))
+                
+                self.recording_list.addItem(item)
+            
+            # Reconnect itemClicked signal after repopulating list with NEW items
+            self.recording_list.itemClicked.connect(self._on_recording_selected)
+            print(f"[RecordingPlayerScreen] itemClicked signal connected to new items")
+            
+            # Auto-select newest recording (index 0 after sort)
+            if valid_recordings:
+                self.recording_list.setCurrentRow(0)
+                self.set_recording(valid_recordings[0])
+                print(f"[RecordingPlayerScreen] Auto-selected newest recording: {valid_recordings[0].get('id')}")
+            else:
+                print("[RecordingPlayerScreen] No valid recordings found")
+                self.recording_info.setText("No valid recordings for this patient")
+        
+        except Exception as e:
+            print(f"[RecordingPlayerScreen] Error refreshing recordings list: {e}")
+            self.recording_info.setText(f"Error loading recordings: {str(e)}")
+    
     def _update_plots(self, recording: dict) -> None:
         """Update the three plot areas with current and baseline data."""
         
-        # Clear previous plots
+        # Clear previous plots (but NOT the recording list!)
         self.baseline_figure.clear()
         self.current_figure.clear()
-        self.recording_list.clear()
         
         # === Left Plot: Baseline Recording (if exists) ===
         baseline_ax = self.baseline_figure.add_subplot(111)
@@ -689,6 +823,32 @@ class RecordingPlayerScreen(QWidget):
         else:
             self.duration_label.setText("--:--")
     
+    def _on_preview_timer(self):
+        """Update live preview during recording with actual camera frames."""
+        if not self.is_recording or not self.camera_controller:
+            return
+        
+        try:
+            # Get current frame from camera (PIL Image)
+            frame = self.camera_controller.get_frame()
+            if frame:
+                # Convert PIL Image to numpy array
+                frame_np = np.array(frame)
+                
+                # Convert RGB to QImage
+                height, width, channel = frame_np.shape
+                bytes_per_line = 3 * width
+                q_img = QImage(frame_np.data, width, height, bytes_per_line, QImage.Format_RGB888)
+                
+                # Convert to QPixmap
+                pixmap = QPixmap.fromImage(q_img)
+                
+                # Scale to fit label while maintaining aspect ratio
+                scaled = pixmap.scaledToHeight(self.preview_label.height(), Qt.SmoothTransformation)
+                self.preview_label.setPixmap(scaled)
+        except Exception as e:
+            print(f"[RecordingPlayerScreen._on_preview_timer] Error: {e}")
+    
     def _on_start_recording(self):
         """Start recording video from camera (8-second Pupillometry Protocol)."""
         # Check if camera controller exists
@@ -717,10 +877,21 @@ class RecordingPlayerScreen(QWidget):
             self.stop_recording_btn.setEnabled(True)
             self.stop_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
             
-            # Starte Recording in separatem Thread
+            # Prevent duplicate threads
+            if hasattr(self, 'recording_worker') and self.recording_worker and self.recording_worker.isRunning():
+                self.recording_info.setText("✗ Recording läuft bereits!")
+                return
+            
+            # Start recording in separate thread
             self.recording_worker = RecordingWorker(self.camera_controller)
             self.recording_worker.recording_finished.connect(self._on_recording_finished)
             self.recording_worker.start()
+            
+            # Switch to live preview display
+            self.video_stack.setCurrentIndex(1)
+            
+            # Start timer to poll for new frames
+            self.preview_timer.start(50)  # Poll every 50ms
             
             self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus bei 1.0-1.5s)")
             
@@ -738,6 +909,10 @@ class RecordingPlayerScreen(QWidget):
             return
         
         try:
+            # Stop preview timer and switch back to video player
+            self.preview_timer.stop()
+            self.video_stack.setCurrentIndex(0)
+            
             # Stoppe Recording
             self.camera_controller.stop_recording()
             
@@ -896,6 +1071,10 @@ class RecordingPlayerScreen(QWidget):
         Wird aufgerufen wenn Recording-Thread fertig ist
         result: "success:<filepath>" oder "manual_stop" oder "error"
         """
+        # Stop preview timer and switch back to video player
+        self.preview_timer.stop()
+        self.video_stack.setCurrentIndex(0)
+        
         if result.startswith("success:"):
             filepath = result.split(":", 1)[1]
             self._complete_recording()
@@ -946,6 +1125,9 @@ class RecordingPlayerScreen(QWidget):
         self.current_patient_display = patient_display
         # Update info label to show which patient is being recorded
         self.recording_info.setText(f"Patient: {patient_display}")
+        
+        # Refresh recordings list for this patient
+        self._refresh_recordings_list()
 
 
 # -------------------------------------------------
@@ -1225,7 +1407,7 @@ class SettingsScreen(QWidget):
                 return
             
             self._frame_none_count = 0
-            print(f"DEBUG: Got frame, type={type(frame)}, size={frame.size if hasattr(frame, 'size') else 'no size'}")
+            #print(f"DEBUG: Got frame, type={type(frame)}, size={frame.size if hasattr(frame, 'size') else 'no size'}")
             
             # Frame ist ein PIL Image von USB-Webcam
             # Konvertiere zu QPixmap
@@ -1244,7 +1426,7 @@ class SettingsScreen(QWidget):
                 print("WARNING: Pixmap is null after loading")
                 return
             
-            print(f"DEBUG: Pixmap loaded successfully, size={pixmap.size()}")
+            #print(f"DEBUG: Pixmap loaded successfully, size={pixmap.size()}")
             
             # Skaliere auf Preview-Größe (150x150)
             scaled_pixmap = pixmap.scaledToWidth(150, Qt.SmoothTransformation)

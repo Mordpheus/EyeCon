@@ -336,11 +336,11 @@ class CameraController:
         Returns:
             PIL Image (RGB format) oder None bei Fehler
         """
-        print(f"[get_frame] capture={self.capture is not None}, isOpened={self.capture.isOpened() if self.capture else False}")
+        #print(f"[get_frame] capture={self.capture is not None}, isOpened={self.capture.isOpened() if self.capture else False}")
         
         if not self.capture or not self.capture.isOpened():
             logger.debug("Keine Kamera verbunden")
-            print(f"[get_frame] FAILED: No capture or not open")
+            #print(f"[get_frame] FAILED: No capture or not open")
             return None
         
         try:
@@ -348,32 +348,32 @@ class CameraController:
             if self.capture_lock:
                 with self.capture_lock:
                     ret, frame = self.capture.read()
-                    print(f"[get_frame] read result: ret={ret}, frame={'OK' if frame is not None else 'None'}")
+                    #print(f"[get_frame] read result: ret={ret}, frame={'OK' if frame is not None else 'None'}")
                     
                     if ret and frame is not None:
                         # Konvertiere BGR zu RGB und dann zu PIL Image
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         pil_image = Image.fromarray(frame_rgb)
-                        print(f"[get_frame] returning PIL image: {pil_image.size}")
+                        #print(f"[get_frame] returning PIL image: {pil_image.size}")
                         return pil_image
                     else:
                         logger.warning("Fehler beim Lesen des Frames")
-                        print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
+                        #print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
                         return None
             else:
                 # Lock not available - create it now and use it
                 self.capture_lock = threading.Lock()
                 with self.capture_lock:
                     ret, frame = self.capture.read()
-                print(f"[get_frame] read result (with lock): ret={ret}, frame={'OK' if frame is not None else 'None'}")
+                #print(f"[get_frame] read result (with lock): ret={ret}, frame={'OK' if frame is not None else 'None'}")
                 if ret and frame is not None:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     pil_image = Image.fromarray(frame_rgb)
-                    print(f"[get_frame] returning PIL image: {pil_image.size}")
+                    #print(f"[get_frame] returning PIL image: {pil_image.size}")
                     return pil_image
                 else:
                     logger.warning("Fehler beim Lesen des Frames")
-                    print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
+                    #print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
                     return None
             
         except Exception as e:

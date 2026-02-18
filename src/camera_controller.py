@@ -281,9 +281,12 @@ class CameraController:
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
             self.capture.set(cv2.CAP_PROP_FPS, 30)
             
-            # Test: Try to read one frame
+            # Test: Try to read one frame (with lock for thread safety)
+            if self.capture_lock is None:
+                self.capture_lock = threading.Lock()
             print(f"[camera_controller] Testing frame read...")
-            ret, frame = self.capture.read()
+            with self.capture_lock:
+                ret, frame = self.capture.read()
             if not ret or frame is None:
                 logger.error(f"Cannot read frame from camera {device_index}")
                 self.disconnect_camera()
@@ -358,9 +361,20 @@ class CameraController:
                         print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
                         return None
             else:
-                # No lock available, read anyway (less safe)
-                ret, frame = self.capture.read()
-                print(f"[get_frame] read result (no lock): ret={ret}, frame={'OK' if frame is not None else 'None'}")
+                # Lock not available - create it now and use it
+                self.capture_lock = threading.Lock()
+                with self.capture_lock:
+                    ret, frame = self.capture.read()
+                print(f"[get_frame] read result (with lock): ret={ret}, frame={'OK' if frame is not None else 'None'}")
+                if ret and frame is not None:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(frame_rgb)
+                    print(f"[get_frame] returning PIL image: {pil_image.size}")
+                    return pil_image
+                else:
+                    logger.warning("Fehler beim Lesen des Frames")
+                    print(f"[get_frame] FAILED: ret={ret}, frame={frame}")
+                    return None
             
         except Exception as e:
             logger.error(f"Fehler beim Abrufen des Frames: {e}")
@@ -629,8 +643,13 @@ class CameraController:
                     led_activated = False
                     logger.info(f"LED AUS bei {elapsed:.2f}s")
                 
-                # Capture Frame
-                ret, frame = self.capture.read()
+                # Capture Frame (with lock for thread safety)
+                if self.capture_lock:
+                    with self.capture_lock:
+                        ret, frame = self.capture.read()
+                else:
+                    ret, frame = self.capture.read()
+                
                 if ret and frame is not None:
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     self.recording_frames.append((frame_rgb, elapsed))

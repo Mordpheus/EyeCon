@@ -98,7 +98,8 @@ class DetailViewDialog(QDialog):
     
     def __init__(self, frame_number: int, image_data: np.ndarray,
                  pupil_diameter: float, position: tuple = None,
-                 confidence: float = 0.0, parent=None):
+                 confidence: float = 0.0, all_eyes: list = None,
+                 parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"PLR Test - Frame {frame_number} Detail View")
         self.setGeometry(100, 100, 900, 700)
@@ -106,22 +107,30 @@ class DetailViewDialog(QDialog):
         layout = QVBoxLayout()
         
         # Header
-        header = QLabel(f"Frame {frame_number} | Pupil Diameter: {pupil_diameter:.2f}px | Confidence: {confidence:.2f}")
+        num_eyes = len(all_eyes) if all_eyes else (1 if position else 0)
+        header = QLabel(f"Frame {frame_number} | Eyes detected: {num_eyes} | "
+                       f"Primary Ø: {pupil_diameter:.2f}px | Confidence: {confidence:.2f}")
         header.setStyleSheet("font-weight: bold; font-size: 12px; padding: 10px;")
         layout.addWidget(header)
         
-        # Display image with pupil overlay
+        # Display image with pupil overlay for ALL eyes
         self.image_label = QLabel()
-        self.draw_pupil_overlay(image_data, pupil_diameter, position)
+        self.draw_pupil_overlay(image_data, pupil_diameter, position, all_eyes)
         layout.addWidget(self.image_label)
         
         # Info panel
-        info_text = f"""
-        Frame Number: {frame_number}
-        Pupil Diameter: {pupil_diameter:.2f} pixels
-        Detection Confidence: {confidence:.3f}
-        Position: {position if position else 'N/A'}
-        """
+        info_text = f"\n        Frame Number: {frame_number}\n"
+        if all_eyes:
+            for i, eye in enumerate(all_eyes):
+                side = "L" if i == 0 else "R"
+                ex, ey = eye.get('position', (0, 0))
+                ed = eye.get('diameter_px', 0)
+                ec = eye.get('confidence', 0)
+                info_text += f"        Eye {side}: ({ex:.0f}, {ey:.0f}) Ø {ed:.1f}px  Conf: {ec:.2f}\n"
+        else:
+            info_text += f"        Position: {position if position else 'N/A'}\n"
+            info_text += f"        Pupil Diameter: {pupil_diameter:.2f} pixels\n"
+        
         info_label = QLabel(info_text)
         info_label.setStyleSheet("background-color: #f5f5f5; padding: 10px; border-radius: 5px;")
         layout.addWidget(info_label)
@@ -133,45 +142,53 @@ class DetailViewDialog(QDialog):
         
         self.setLayout(layout)
     
-    def draw_pupil_overlay(self, image: np.ndarray, diameter: float, position: tuple):
-        """Draw pupil circle and diameter indicator on image."""
+    def draw_pupil_overlay(self, image: np.ndarray, diameter: float,
+                           position: tuple, all_eyes: list = None):
+        """Draw pupil circles for all detected eyes on image."""
         display_image = image.copy()
-        
         h, w = display_image.shape[:2]
-        
-        # Use provided position if available and valid
-        if position and len(position) >= 2 and not np.isnan(position[0]) and not np.isnan(position[1]):
-            center_x = int(position[0])
-            center_y = int(position[1])
-        else:
-            # Fallback to center if position is invalid
-            center_x, center_y = w // 2, h // 2
-            logger.warning(f"Invalid position {position}, using center: ({center_x}, {center_y})")
-        
-        # Clamp coordinates to image bounds
-        center_x = max(0, min(center_x, w - 1))
-        center_y = max(0, min(center_y, h - 1))
-        
-        radius = int(diameter / 2)
-        
-        # Draw pupil circle (green)
-        cv2.circle(display_image, (center_x, center_y), radius, (0, 255, 0), 2)
-        
-        # Draw diameter line (from left to right through center)
-        cv2.line(display_image, (center_x - radius, center_y),
-                (center_x + radius, center_y), (0, 255, 0), 3)
-        
-        # Draw crosshair (blue/cyan)
-        crosshair_size = 30
-        cv2.line(display_image, (center_x - crosshair_size, center_y),
-                (center_x + crosshair_size, center_y), (0, 255, 255), 2)
-        cv2.line(display_image, (center_x, center_y - crosshair_size),
-                (center_x, center_y + crosshair_size), (0, 255, 255), 2)
-        
-        # Add text label
-        label = f"Ø {diameter:.1f}px"
-        cv2.putText(display_image, label, (center_x - 40, center_y - radius - 10),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # Build list of eyes to draw
+        eyes_to_draw = []
+        if all_eyes:
+            for eye in all_eyes:
+                pos = eye.get('position')
+                diam = eye.get('diameter_px', 0)
+                if pos and len(pos) >= 2 and not np.isnan(pos[0]) and not np.isnan(pos[1]):
+                    eyes_to_draw.append((pos, diam))
+        elif position and len(position) >= 2 and not np.isnan(position[0]) and not np.isnan(position[1]):
+            eyes_to_draw.append((position, diameter))
+
+        # Color per eye: green for left, blue for right
+        colors = [(0, 255, 0), (255, 180, 0)]  # Green, Light Blue (BGR)
+        labels = ["L", "R"]
+
+        for idx, (pos, diam) in enumerate(eyes_to_draw):
+            center_x = max(0, min(int(pos[0]), w - 1))
+            center_y = max(0, min(int(pos[1]), h - 1))
+            radius = int(diam / 2)
+            color = colors[idx % len(colors)]
+
+            # Draw pupil circle
+            cv2.circle(display_image, (center_x, center_y), radius, color, 2)
+
+            # Draw diameter line
+            cv2.line(display_image, (center_x - radius, center_y),
+                    (center_x + radius, center_y), color, 3)
+
+            # Draw crosshair
+            cs = 30
+            cv2.line(display_image, (center_x - cs, center_y),
+                    (center_x + cs, center_y), (0, 255, 255), 2)
+            cv2.line(display_image, (center_x, center_y - cs),
+                    (center_x, center_y + cs), (0, 255, 255), 2)
+
+            # Text label with eye side and diameter
+            side = labels[idx] if idx < len(labels) else str(idx)
+            label = f"{side} Ø{diam:.0f}px"
+            cv2.putText(display_image, label,
+                       (center_x - 40, center_y - radius - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
         # Convert to QPixmap
         h, w = display_image.shape[:2]
@@ -280,8 +297,8 @@ class PLRTestScreen(QWidget):
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
             
-            # Use the improved PupilAnalyzer with classical CV detection
-            analyzer = PupilAnalyzer(model_name="yolov8n", use_onnx=False)
+            # Use Haar Cascade + Hough Circle Detection pipeline
+            analyzer = PupilAnalyzer()
             
             # Extract frames from video (process all frames)
             cap = cv2.VideoCapture(self.current_video_path)
@@ -322,13 +339,25 @@ class PLRTestScreen(QWidget):
                     
                     # Now safe to convert to int
                     position = (int(position_x), int(position_y))
+
+                    # Build all_eyes list from analyzer.all_detections
+                    all_eyes = []
+                    frame_dets = analyzer.all_detections.get(pupil_frame.frame_number, [])
+                    for det in frame_dets:
+                        if det.confidence > 0 and not np.isnan(det.position_x):
+                            all_eyes.append({
+                                'position': (det.position_x, det.position_y),
+                                'diameter_px': det.diameter_px,
+                                'confidence': det.confidence
+                            })
                     
                     key_frames_data.append({
                         'frame_number': pupil_frame.frame_number,
                         'image': frame,
                         'diameter': diameter,
                         'confidence': confidence,
-                        'position': position
+                        'position': position,
+                        'all_eyes': all_eyes
                     })
                 
                 # Progress bar
@@ -391,6 +420,7 @@ class PLRTestScreen(QWidget):
                 frame_info['diameter'],
                 frame_info['position'],
                 frame_info['confidence'],
+                all_eyes=frame_info.get('all_eyes'),
                 parent=self
             )
             dialog.exec()

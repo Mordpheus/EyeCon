@@ -116,7 +116,7 @@ def test_pupil_analysis():
             return
         
         print(f"\n📹 Loading video: {DEMO_VIDEO_PATH}")
-        analyzer = PupilAnalyzer(model_name="yolov8n", use_onnx=True)
+        analyzer = PupilAnalyzer()
         success = analyzer.extract_frames_from_video(
             DEMO_VIDEO_PATH,
             frame_pool=FRAME_POOL,
@@ -131,7 +131,7 @@ def test_pupil_analysis():
         recording_id = "demo_video"
     
     # Step 2: Create analyzer and populate with data
-    analyzer = PupilAnalyzer(model_name="yolov8n")
+    analyzer = PupilAnalyzer()
     
     # Manually populate frames (in real usage, extract_frames_from_video does this)
     for frame_data in pupil_frames:

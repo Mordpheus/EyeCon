@@ -43,11 +43,11 @@ print(f"    Patient: {patient['last_name']}, {patient['first_name']}")
 print(f"    Video: {Path(video_path).name}")
 print(f"    Pfad: {video_path}")
 
-# Schritt 4: PyTorch Analyzer laden
-print("\n[4] PyTorch YOLO Modell laden...")
+# Schritt 4: Analyzer laden
+print("\n[4] CV-Pipeline laden...")
 try:
-    analyzer = PupilAnalyzer(model_name="yolov8n", use_onnx=False, device="cpu")
-    print("    ✓ Modell geladen (PyTorch)")
+    analyzer = PupilAnalyzer()
+    print("    ✓ Analyzer geladen (Classical CV)")
 except Exception as e:
     print(f"    ✗ Modell-Fehler: {e}")
     sys.exit(1)

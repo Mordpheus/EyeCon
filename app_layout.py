@@ -132,10 +132,11 @@ class LeftArea(QWidget):
         lower_layout.setSpacing(10)
 
         # Patient Name Display (non-clickable) - STARTS AT 50% HEIGHT
+        # Displays patient info in 2 lines: Name on line 1, ID on line 2
         self.patient_name_display = QPushButton()
-        self.patient_name_display.setText("No patient selected")
+        self.patient_name_display.setText("Keine Auswahl\n")
         self.patient_name_display.setEnabled(False)
-        self.patient_name_display.setMinimumHeight(55)
+        self.patient_name_display.setMinimumHeight(65)
         self.patient_name_display.setStyleSheet(
             "QPushButton { "
             "background-color: #e7ecf8; "
@@ -145,7 +146,8 @@ class LeftArea(QWidget):
             "padding: 10px; "
             "font-weight: bold; "
             "text-align: left; "
-            "font-size: 12px; "
+            "font-size: 11px; "
+            "line-height: 1.4em; "
             "}"
         )
         lower_layout.addWidget(self.patient_name_display)
@@ -159,7 +161,7 @@ class LeftArea(QWidget):
         record_icon.setStyleSheet("font-size: 18px;")
         new_recording_layout.addWidget(record_icon)
         
-        self.btn_new_recording = QPushButton("Neue Aufnahme")
+        self.btn_new_recording = QPushButton("Patienten Videos")
         self.btn_new_recording.setMinimumHeight(40)
         self.btn_new_recording.setStyleSheet(
             "QPushButton { "
@@ -225,15 +227,18 @@ class LeftArea(QWidget):
 
     def set_selected_patient(self, patient_name: str, patient_id: str = None) -> None:
         """
-        Update patient name display and load recordings for selected patient.
+        Display format (2 lines):
+        Line 1: "Nachname, Vorname"
+        Line 2: "Patienten ID"
         
         Parameters:
-            patient_name (str): Patient ID in format XXXX-YYYY-MM-DD-G
+            patient_name (str): Patient name in format "Lastname, Firstname"
             patient_id (str): Database ID (TEXT) of the selected patient
                 Passed from CenterArea to load recordings
         """
-        # Update patient name display with highlighted styling
-        self.patient_name_display.setText(patient_name)
+        # Create 2-line display: Name on line 1, ID on line 2
+        display_text = f"{patient_name}\n{patient_id}"
+        self.patient_name_display.setText(display_text)
         self.patient_name_display.setStyleSheet(
             "QPushButton { "
             "background-color: #d0dff0; "
@@ -243,6 +248,8 @@ class LeftArea(QWidget):
             "padding: 8px; "
             "font-weight: bold; "
             "text-align: left; "
+            "font-size: 11px; "
+            "line-height: 1.4em; "
             "}"
         )
         
@@ -275,6 +282,9 @@ class LeftArea(QWidget):
             recordings (list): List of recording dictionaries from database
                 Each dict contains: {id, date, baseline}
         """
+        # Block signals during update to prevent auto-navigation on index change
+        self.recordings_dropdown.blockSignals(True)
+        
         # Clear all existing items from dropdown
         self.recordings_dropdown.clear()
         
@@ -328,6 +338,9 @@ class LeftArea(QWidget):
         
         # Auto-select first recording (index 1, since 0 is placeholder)
         self.recordings_dropdown.setCurrentIndex(1)
+        
+        # Re-enable signals for user interactions
+        self.recordings_dropdown.blockSignals(False)
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
@@ -1867,14 +1880,14 @@ class CenterArea(QWidget):
         # Fetch patient data from database
         patient = self.manager.get_patient(patient_id)
         if patient:
-            # Format patient display: "ID - Nachname, Vorname"
+            # Format patient display for LeftArea: "Nachname, Vorname"
             first_name = patient.get('first_name', '')
             last_name = patient.get('last_name', '')
-            patient_display = f"{patient['id']} - {last_name}, {first_name}"
+            patient_name_display = f"{last_name}, {first_name}".strip(", ")
             
             # Update sidebar patient display and load recordings
-            # Pass patient_id to trigger recordings update in LeftArea
-            self.parent().left.set_selected_patient(patient_display, patient_id)
+            # Pass both name (for line 1) and ID (for line 2)
+            self.parent().left.set_selected_patient(patient_name_display, patient_id)
             
             # Fetch all recordings for this patient from database
             recordings = self.manager.get_recordings(patient_id)

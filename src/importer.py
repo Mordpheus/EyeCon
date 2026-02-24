@@ -16,19 +16,22 @@ from typing import Dict, Any, Tuple
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 from src.db import PatientDataManager
+from src.patients_dialog import DuplicatePatientDialog
 
 
 class TBIHeadsetImporter:
     """Import patient data from TBI_Headset database exports (ZIP format)."""
 
-    def __init__(self, eyecon_db_manager: PatientDataManager):
+    def __init__(self, eyecon_db_manager: PatientDataManager, parent_widget=None):
         """
         Initialize importer.
         
         Args:
-            eyecon_db_manager: PatientDataManager instannz für Ziel DatenBank
+            eyecon_db_manager: PatientDataManager instance for target database
+            parent_widget: Parent widget for dialogs (e.g., main window)
         """
         self.db_manager = eyecon_db_manager
+        self.parent_widget = parent_widget
         self.temp_dir = None
 
     def show_file_dialog(self, parent=None) -> str | None:
@@ -143,15 +146,39 @@ class TBIHeadsetImporter:
         
         return mapping, errors
 
+    def handle_duplicate_patient(self, existing_patient: dict, tbi_patient: dict) -> str:
+        """
+        Handle duplicate patient detection during import.
+        
+        Shows DuplicatePatientDialog and returns user's decision.
+        
+        Args:
+            existing_patient: Patient record already in our system
+            tbi_patient: Patient record from TBI import
+            
+        Returns:
+            'merge': Use existing patient, add recordings from TBI
+            'create_new': Create new patient with our standard ID format + TBI data
+            'skip': Don't import this patient
+        """
+        try:
+            dialog = DuplicatePatientDialog(existing_patient, tbi_patient, parent=self.parent_widget)
+            dialog.exec()
+            decision = dialog.get_decision()
+            return decision if decision else 'skip'
+        except Exception as e:
+            print(f"Error in duplicate patient dialog: {e}")
+            return 'skip'
+
     def import_from_zip(self, zip_path: str, parent=None) -> Tuple[bool, Dict[str, Any]]:
         """
         Complete import workflow: extract ZIP, copy videos, import database, cleanup.
         
         Workflow:
         1. Extract ZIP to temporary directory
-        2. Copy videos from recordings/ to data/measurements/
+        2. Copy videos from recordings/ to data/recordings/
         3. Find patient_database.db in extraction
-        4. Import data to EyeCon database (with updated local video paths)
+        4. Import data to EyeCon database (with callback for duplicate handling)
         5. Clean up temporary files
         6. Show result dialog
         
@@ -162,9 +189,14 @@ class TBIHeadsetImporter:
         Returns:
             Tuple (success: bool, result: dict with import statistics)
         """
+        # Store parent for use in callbacks
+        if parent:
+            self.parent_widget = parent
+            
         result = {
             'imported_patients': 0,
             'imported_recordings': 0,
+            'duplicate_handled': 0,
             'errors': []
         }
 
@@ -186,10 +218,15 @@ class TBIHeadsetImporter:
                 self.cleanup()
                 return False, result
             
-            # Step 4: Import database (pass video mapping so DB can use local paths)
-            import_result = self.db_manager.import_from_tbi_headset(db_path, video_mapping)
+            # Step 4: Import database with duplicate callback handler
+            import_result = self.db_manager.import_from_tbi_headset(
+                db_path, 
+                video_mapping,
+                on_duplicate_callback=self.handle_duplicate_patient
+            )
             result['imported_patients'] = import_result['imported_patients']
             result['imported_recordings'] = import_result['imported_recordings']
+            result['duplicate_handled'] = import_result.get('duplicate_handled', 0)
             result['errors'].extend(import_result['errors'])
             
             return True, result

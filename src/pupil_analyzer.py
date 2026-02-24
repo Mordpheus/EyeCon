@@ -214,9 +214,17 @@ class PupilAnalyzer:
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (11, 11), 0)
         
-        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
-        # to improve contrast and make pupils stand out
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # Apply CLAHE with adaptive clipLimit based on lighting conditions
+        # Priority 2: Robustness gegen Lichtvariationen
+        avg_brightness = np.mean(blurred)
+        if avg_brightness > 180:
+            clip_limit = 2.0  # Bright image: gentle enhancement
+        elif avg_brightness < 90:
+            clip_limit = 5.0  # Dark image: aggressive enhancement
+        else:
+            clip_limit = 3.0  # Normal: standard enhancement
+        
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
         enhanced = clahe.apply(blurred)
         
         # CRITICAL: Detect circles directly on enhanced image, NOT on binary mask

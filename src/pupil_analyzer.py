@@ -236,8 +236,8 @@ class PupilAnalyzer:
             dp=1.2,
             minDist=60,         # Min distance between circle centers
             param1=50,          # Upper threshold for Canny edge detection
-            param2=28,          # Accumulator threshold (lower = more circles)
-            minRadius=8,        # Absolute minimum pupil size
+            param2=20,          # Accumulator threshold lowered from 28→20 (Priority 3: detect more circles)
+            minRadius=6,        # Absolute minimum pupil size lowered from 8→6 (detect smaller pupils)
             maxRadius=65        # Absolute maximum pupil size
         )
         

@@ -3,11 +3,16 @@ venv/
 __pycache__/
 *.pyc
 data/eyecon.db
+data/recordings/
 .env
 .vscode/
 
 # Ignoriere eingebetteten EyeCon-Ordner
 EyeCon/
+
+# YOLOv8 Modelle (große Dateien)
+*.pt
+*.onnx
 
 # Dokumentation (lokal nur)
 TODO.md
@@ -15,3 +20,4 @@ Fixes_und_Ideen.tex
 KAMERA_TEST_BERICHT.md
 RaspPI_tests.md
 Brain.md
+PLR_ANALYSIS_IMPLEMENTATION.md

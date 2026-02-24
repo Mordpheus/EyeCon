@@ -1874,6 +1874,11 @@ class CenterArea(QWidget):
         Parameters:
             patient_id (str): Database ID of selected patient (format: XXXX-YYYY-MM-DD-G)
         """
+        # CRITICAL FIX: Clear old video state before loading new patient recordings
+        # This prevents old video from persisting or new patient's video from not playing
+        self.recording_player.media_player.setSource(QUrl())
+        self.stacked_widget.setCurrentIndex(0)
+        
         # Store currently selected patient ID for CRUD operations
         self.selected_patient_id = patient_id
         

@@ -449,3 +449,90 @@ class PupilAnalyzer:
             prt_63 or (timestamps[-1] - stim_end_time),
             prt_75 or (timestamps[-1] - stim_end_time)
         )
+    
+    def extract_key_frames_for_preview(
+        self,
+        video_path: str,
+        num_frames: int = 9
+    ) -> List[Dict[str, Any]]:
+        """
+        Extract equally-spaced key frames from video for quick preview/testing.
+        
+        Optimized for UI preview: returns frame images + YOLO detections
+        without storing full analysis in self.pupil_frames.
+        
+        Args:
+            video_path: Path to video file
+            num_frames: Number of key frames to extract
+            
+        Returns:
+            List of dicts with keys:
+            - frame_number: int
+            - image: np.ndarray (BGR)
+            - diameter_px: float
+            - confidence: float
+            - position: tuple (center_x, center_y)
+        """
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            logger.error(f"Cannot open video: {video_path}")
+            return []
+        
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        # Calculate equally-spaced frame indices
+        frame_indices = np.linspace(0, total_frames - 1, num_frames, dtype=int)
+        
+        key_frames_data = []
+        
+        logger.info(f"Extracting {num_frames} key frames from {total_frames} total frames")
+        
+        try:
+            for frame_idx in frame_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                ret, frame = cap.read()
+                
+                if not ret:
+                    continue
+                
+                timestamp = frame_idx / fps
+                
+                # Run YOLO inference
+                results = self.model(frame, conf=0.5, verbose=False)
+                
+                # Extract first detection (usually largest/most confident)
+                diameter = None
+                confidence = 0.0
+                center_x, center_y = frame.shape[1] // 2, frame.shape[0] // 2
+                
+                if results and results[0].boxes is not None:
+                    for box in results[0].boxes:
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        conf = float(box.conf[0].cpu().numpy())
+                        
+                        width = x2 - x1
+                        height = y2 - y1
+                        diameter = (width + height) / 2
+                        center_x = (x1 + x2) / 2
+                        center_y = (y1 + y2) / 2
+                        confidence = conf
+                        break  # Use first detection
+                
+                if diameter is None:
+                    diameter = 35.0  # Default fallback
+                
+                key_frames_data.append({
+                    'frame_number': frame_idx,
+                    'image': frame,
+                    'diameter_px': float(diameter),
+                    'confidence': confidence,
+                    'position': (float(center_x), float(center_y)),
+                    'timestamp': float(timestamp)
+                })
+        
+        finally:
+            cap.release()
+        
+        logger.info(f"✅ Extracted {len(key_frames_data)} key frames")
+        return key_frames_data

@@ -403,14 +403,37 @@ class PatientDataManager:
 
     def get_recordings(self, patient_id: str) -> List[Dict[str, Any]]:
         """
-        Retrieve all recordings of a patient from the database.
+        Retrieve all recordings for a patient by scanning physical files in data/recordings/.
         
-        Returns recordings sorted by date in descending order (newest first).
+        This approach ensures only recordings with actual video files are shown,
+        avoiding orphaned database entries pointing to deleted files.
+        
+        Returns recordings sorted by modification time (newest first).
         """
-        cur = self.conn.cursor()
-        cur.execute("SELECT * FROM recording WHERE patientId = ? ORDER BY date DESC", (patient_id,))
-        rows = cur.fetchall()
-        return [dict(row) for row in rows]
+        from pathlib import Path
+        import os
+        
+        recordings_dir = Path("data/recordings")
+        recordings = []
+        
+        # Scan for all MP4 files in data/recordings/
+        if recordings_dir.exists():
+            for video_file in sorted(recordings_dir.glob("*.mp4"), reverse=True):
+                # Create recording info from file
+                rec_id = video_file.stem  # Filename without .mp4
+                file_path = str(video_file)
+                file_mtime = int(video_file.stat().st_mtime)
+                
+                recording = {
+                    'id': rec_id,
+                    'patientId': patient_id,
+                    'date': file_mtime,
+                    'baseline': 0,
+                    'file_path': file_path
+                }
+                recordings.append(recording)
+        
+        return recordings
 
     def get_baseline_recording(self, patient_id: str) -> Dict[str, Any] | None:
         """

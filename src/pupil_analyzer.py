@@ -87,20 +87,20 @@ class PupilAnalyzer:
     6. Database persistence
     """
     
-    def __init__(self, model_name: str = "yolov8n", use_onnx: bool = True, device: str = "cpu"):
+    def __init__(self, model_name: str = "yolov8n", use_onnx: bool = False, device: str = "cpu"):
         """
         Initialize pupil analyzer with YOLO model.
         
         Args:
             model_name: YOLO model variant (yolov8n recommended for CPU)
-            use_onnx: Convert to ONNX for CPU optimization
+            use_onnx: Convert to ONNX for CPU optimization (False = use PyTorch)
             device: "cpu" or "cuda" (if NVIDIA available)
         """
         self.model_name = model_name
         self.use_onnx = use_onnx
         self.device = device
         
-        logger.info(f"Loading YOLO model: {model_name} on {device}")
+        logger.info(f"Loading YOLO model: {model_name} on {device} (PyTorch)")
         self.model = YOLO(f"{model_name}.pt")
         
         if use_onnx and device == "cpu":
@@ -167,14 +167,11 @@ class PupilAnalyzer:
                 if max_frames and analyzed_frames >= max_frames:
                     break
                 
-                # YOLO inference
+                # Process frame with classical CV (not YOLO)
                 timestamp = (frame_count / fps)
-                results = self.model(frame, conf=0.5, verbose=False)
-                
-                # Extract pupil data from YOLO detections
                 self._process_yolo_results(
-                    results, 
-                    frame, 
+                    results=None,  # Not used anymore
+                    frame=frame,
                     frame_count=frame_count, 
                     timestamp=timestamp,
                     fps=fps
@@ -201,37 +198,103 @@ class PupilAnalyzer:
         fps: float
     ) -> None:
         """
-        Process YOLO results and extract pupil diameter/position.
+        Process frame and extract pupil diameter/position using classical CV.
         
-        YOLO detects eyes, we calculate diameter from bounding box.
+        CRITICAL: Detect ONLY the pupil (black hole), NOT the iris (colored ring around it).
+        
+        Method:
+        1. Convert to grayscale and apply Gaussian blur
+        2. Apply CLAHE for contrast enhancement
+        3. Binary threshold to find ONLY the darkest regions (pupil)
+        4. Use Hough Circle Detection with STRICT size constraints
+        5. Pick smallest, darkest circle = actual pupil
         """
-        for result in results:
-            if result.boxes is None:
-                continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (11, 11), 0)
+        
+        # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        # to improve contrast and make pupils stand out
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
+        
+        # CRITICAL: Detect circles directly on enhanced image, NOT on binary mask
+        # Binary thresholding was too restrictive and lost pupils
+        # HoughCircles works better on continuous intensity images
+        circles = cv2.HoughCircles(
+            enhanced,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=60,         # Min distance between circle centers
+            param1=50,          # Upper threshold for Canny edge detection
+            param2=28,          # Accumulator threshold (lower = more circles)
+            minRadius=8,        # Absolute minimum pupil size
+            maxRadius=65        # Absolute maximum pupil size
+        )
+        
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
             
-            for box in result.boxes:
-                # Extract bounding box (in pixels)
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                conf = float(box.conf[0].cpu().numpy())
+            # Find the SMALLEST, DARKEST circle (most likely to be pupil, not iris)
+            # Pupils are much smaller than iris and much darker
+            best_circle = None
+            best_score = float('inf')
+            
+            for circle in circles[0]:
+                x, y, r = circle
                 
-                # Calculate diameter and center
-                width = x2 - x1
-                height = y2 - y1
-                diameter = (width + height) / 2  # Average of width and height
-                center_x = (x1 + x2) / 2
-                center_y = (y1 + y2) / 2
-                area = width * height
+                # Only consider circles in realistic pupil size range
+                if 8 < r < 55:  # Pupils typically 15-50px radius (30-100px diameter)
+                    # Measure darkness inside this circle
+                    mask = np.zeros(enhanced.shape, dtype=np.uint8)
+                    cv2.circle(mask, (x, y), r, 255, -1)
+                    
+                    # Get mean intensity (lower = darker = more likely pupil)
+                    mean_intensity = cv2.mean(enhanced, mask=mask)[0]
+                    
+                    # Prefer smallest, darkest circle
+                    # Score combines darkness (intensity) and size preference (smaller = better)
+                    score = mean_intensity + (r * 0.3)  # Bias toward smaller circles
+                    
+                    if score < best_score:
+                        best_score = score
+                        best_circle = (x, y, r)
+            
+            if best_circle is not None:
+                x, y, r = best_circle
+                diameter = 2 * r
+                
+                # Calculate confidence based on darkness (lower intensity = higher confidence)
+                mask = np.zeros(enhanced.shape, dtype=np.uint8)
+                cv2.circle(mask, (x, y), r, 255, -1)
+                mean_intensity = cv2.mean(enhanced, mask=mask)[0]
+                confidence = max(0.0, 1.0 - (mean_intensity / 150.0))  # Normalize to 150 (dark threshold)
                 
                 # Store frame data
                 self.pupil_frames.append(PupilFrame(
                     frame_number=frame_count,
                     timestamp=timestamp,
                     diameter_px=float(diameter),
-                    position_x=float(center_x),
-                    position_y=float(center_y),
-                    confidence=conf,
-                    eye_area_px=int(area)
+                    position_x=float(x),
+                    position_y=float(y),
+                    confidence=min(confidence, 0.99),  # Clamp at 0.99
+                    eye_area_px=int(np.pi * r * r)
                 ))
+                
+                logger.debug(f"Frame {frame_count}: Pupil at ({x}, {y}), diameter={diameter:.1f}px, conf={confidence:.2f}")
+        else:
+            logger.warning(f"Frame {frame_count}: No pupils detected")
+            # Add a dummy entry with NaN to maintain frame count
+            self.pupil_frames.append(PupilFrame(
+                frame_number=frame_count,
+                timestamp=timestamp,
+                diameter_px=np.nan,
+                position_x=np.nan,
+                position_y=np.nan,
+                confidence=0.0,
+                eye_area_px=0
+            ))
     
     def calculate_plr_metrics(
         self,

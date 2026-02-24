@@ -20,6 +20,9 @@ from typing import Optional, List
 from pathlib import Path
 from PIL import Image
 import threading
+import subprocess
+import json
+import os
 
 # Logging Setup
 logging.basicConfig(level=logging.INFO)
@@ -82,6 +85,9 @@ class CameraController:
         self.recording_start_time = None  # Zeitstempel für 8-Sekunden-Zähler
         self.stop_recording_requested = False  # Flag für manuelles Stoppen
         self.manual_stop = False  # True wenn Benutzer Stop drückt, False wenn Auto-Stop nach 8s
+        self.recording_is_baseline = False  # True wenn aktuelle Recording als Baseline markiert
+        self.baseline_counter = 0  # Counter für Baseline-Nummern
+        self.scan_counter = 0  # Counter für Scan-Nummern
         
         # DON'T auto-connect at startup - wait for user to select port in UI
         # This prevents locking the camera/serial when the app starts
@@ -400,13 +406,15 @@ class CameraController:
         """
         return self._send_serial_command('pinctrl set 18 op dl')
     
-    def start_recording(self, output_file: Optional[str] = None) -> bool:
+    def start_recording(self, output_file: Optional[str] = None, is_baseline: bool = False, patient_id: Optional[str] = None) -> bool:
         """
         Startet Video-Aufnahme von der Kamera (mit 8-Sekunden-Pupillometrie-Protokoll)
         Videos werden lokal auf Windows PC gespeichert
         
         Args:
             output_file: Pfad zur Output-Datei (wird angefordert falls None - für Explorer-Dialog)
+            is_baseline: True für Baseline-Aufnahme, False für normale Aufnahme
+            patient_id: Patient-Kennung zur Speicherung in korrektem Folder
         
         Returns:
             True wenn erfolgreich, False sonst
@@ -422,16 +430,18 @@ class CameraController:
         try:
             # Starte Recording im Hintergrund
             self.recording_file = output_file if output_file else "pending"  # Wird später abgefragt
+            self.recording_is_baseline = is_baseline
             self.is_recording = True
             self.stop_recording_requested = False
             self.manual_stop = False
             self.recording_frames = []
             self.recording_start_time = time.time()
             
-            logger.info(f"Aufnahme gestartet (8-Sekunden-Protokoll)")
+            baseline_label = "Baseline" if is_baseline else "Scan"
+            logger.info(f"Aufnahme gestartet (8-Sekunden-Protokoll, {baseline_label})")
             
             # Starten Sie die Recording-Schleife
-            self._recording_loop()
+            self._recording_loop(is_baseline, patient_id)
             
             return True
             
@@ -440,57 +450,71 @@ class CameraController:
             self.is_recording = False
             return False
     
-    def _recording_loop(self):
+    def _recording_loop(self, is_baseline: bool = False, patient_id: Optional[str] = None):
         """
         Interne Recording-Schleife (wird von start_recording() aufgerufen)
         - 8 Sekunden Recording
-        - LED Stimulus bei 1.0-1.5s
-        - Speichern zu MP4 am Ende
+        - LED Stimulus bei 1.0-2.0s (BEIDE Baseline UND Normal! Zum Vergleichen nötig)
+        - Baseline und Normal differ nur in Datenbankmarkierung, nicht in Aufnahme
+        - Speichern zu MP4 am Ende mit Timestamp-Naming
         """
         DURATION = 8.0  # 8 Sekunden
         LED_ON_DELAY = 1.0  # LED AN nach 1s
-        LED_ON_DURATION = 0.5  # LED bleibt 0.5s AN
+        LED_ON_DURATION = 1.0  # LED bleibt 1.0s AN (1.0-2.0s total)
+        
+        logger.info(f"[_recording_loop] Starting: is_baseline={is_baseline}, patient_id={patient_id}")
         
         # Hole Frame-Rate und Auflösung
         fps = int(self.capture.get(cv2.CAP_PROP_FPS)) or 30  # Default 30 FPS
         width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
-        logger.info(f"Recording mit {fps}FPS, {width}x{height}px")
+        logger.info(f"Recording mit {fps}FPS, {width}x{height}px, is_baseline={is_baseline}")
         
-        # Starte Recording-Thread
+        # Starte Recording-Thread - PASS is_baseline UND patient_id EXPLICITLY
         recording_thread = threading.Thread(
             target=self._recording_thread,
-            args=(DURATION, LED_ON_DELAY, LED_ON_DURATION, fps, width, height)
+            args=(DURATION, LED_ON_DELAY, LED_ON_DURATION, fps, width, height, is_baseline, patient_id)
         )
         recording_thread.daemon = False
         recording_thread.start()
+        logger.info(f"[_recording_loop] Thread started")
     
-    def _recording_thread(self, duration, led_on_delay, led_on_duration, fps, width, height):
+    def _recording_thread(self, duration, led_on_delay, led_on_duration, fps, width, height, is_baseline: bool = False, patient_id: Optional[str] = None):
         """
         Thread für Video-Recording mit LED-Stimulus
+        
+        Args:
+            duration: Aufnahmedauer in Sekunden
+            led_on_delay: Verzögerung bis LED AN (1.0s)
+            led_on_duration: Dauer LED AN (1.0s, also 1.0-2.0s total)
+            is_baseline: True wenn Baseline-Aufnahme (GLEICHER LED-Stimulus wie Normal!)
+            patient_id: Patient-Kennung für Folder-Speicherung
         """
         try:
+            logger.info(f"[_recording_thread START] is_baseline={is_baseline}, patient_id={patient_id}, duration={duration}s")
             frame_count = 0
             start_time = time.time()
             led_activated = False
             
             # LED aus am Start
             self.led_off()
+            logger.info(f"[_recording_thread] LED OFF at start, is_baseline={is_baseline}")
             
             while (time.time() - start_time) < duration and not self.stop_recording_requested:
                 elapsed = time.time() - start_time
                 
-                # LED-Stimulus bei 1.0-1.5s
+                # LED-Stimulus bei 1.0-2.0s für BEIDE Baseline und Normal
+                # (Baseline BRAUCHT LED zum Vergleichen mit Normal!)
                 if led_on_delay <= elapsed < (led_on_delay + led_on_duration):
                     if not led_activated:
                         self.led_on()
                         led_activated = True
-                        logger.info(f"LED AN bei {elapsed:.2f}s")
+                        logger.info(f"LED ON bei {elapsed:.2f}s")
                 elif led_activated and elapsed >= (led_on_delay + led_on_duration):
                     self.led_off()
                     led_activated = False
-                    logger.info(f"LED AUS bei {elapsed:.2f}s")
+                    logger.info(f"LED OFF bei {elapsed:.2f}s")
                 
                 # Capture Frame
                 ret, frame = self.capture.read()
@@ -518,22 +542,30 @@ class CameraController:
             else:
                 # Auto-Stop nach 8s - speichern
                 self.manual_stop = False
-                logger.info(f"Recording Auto-Stop nach {elapsed:.2f}s - speichere {len(self.recording_frames)} frames")
-                self._save_recording_to_file()
+                logger.info(f"[_recording_thread] Auto-Stop nach {elapsed:.2f}s - speichere {len(self.recording_frames)} frames, is_baseline={is_baseline}, patient_id={patient_id}")
+                result = self._save_recording_to_file(is_baseline=is_baseline, patient_id=patient_id)
+                logger.info(f"[_recording_thread] Save result: {result}")
             
-            self.is_recording = False
+            self.is_recording = False  # CRITICAL: Always reset flag at end
+            logger.info(f"[_recording_thread END] is_baseline={is_baseline}")
             
         except Exception as e:
             logger.error(f"Fehler in Recording-Thread: {e}")
-            self.is_recording = False
+            self.is_recording = False  # CRITICAL: Reset flag on error
             self.led_off()
     
-    def _save_recording_to_file(self, output_file: Optional[str] = None) -> Optional[str]:
+    def _save_recording_to_file(self, output_file: Optional[str] = None, is_baseline: bool = False, patient_id: Optional[str] = None) -> Optional[str]:
         """
-        Speichert aufgezeichnete Frames zu MP4-Datei
+        Speichert aufgezeichnete Frames zu MP4-Datei mit Timestamp-basiertem Naming
+        
+        Naming Schema:
+        - Normal: {unix_timestamp}_scan_{number}.mp4
+        - Baseline: {unix_timestamp}_baseline.mp4
         
         Args:
             output_file: Zieldatei (wenn None, wird automatisch generiert)
+            is_baseline: True wenn Baseline-Aufnahme
+            patient_id: Patient-Kennung für Folder, z.B. "patient_001"
             
         Returns:
             Pfad zur gespeicherten Datei oder None bei Fehler
@@ -545,11 +577,28 @@ class CameraController:
         try:
             # Erzeuge Output-Datei wenn nicht angegeben
             if not output_file or output_file == "pending":
-                recordings_dir = Path("data/recordings")
+                # Erstelle Patient-Folder wenn patient_id vorhanden
+                if patient_id:
+                    recordings_dir = Path("data/recordings") / str(patient_id)
+                else:
+                    recordings_dir = Path("data/recordings")
+                
                 recordings_dir.mkdir(parents=True, exist_ok=True)
                 
-                timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-                output_file = str(recordings_dir / f"recording_{timestamp}.mp4")
+                # Erzeuge Timestamp (Unix-Timestamp für eindeutige Identifikation)
+                unix_timestamp = int(time.time())
+                
+                # Generiere Filename basierend auf Typ
+                if is_baseline:
+                    # Baseline: timestamp_baseline.mp4
+                    filename = f"{unix_timestamp}_baseline.mp4"
+                else:
+                    # Normal: timestamp_scan_X.mp4
+                    self.scan_counter += 1
+                    filename = f"{unix_timestamp}_scan_{self.scan_counter}.mp4"
+                
+                output_file = str(recordings_dir / filename)
+                logger.info(f"Auto-generated filename: {filename} (is_baseline={is_baseline}, patient_id={patient_id})")
             
             # Hole erste Frame für Dimensionen
             first_frame = self.recording_frames[0][0]
@@ -573,7 +622,8 @@ class CameraController:
             out.release()
             
             file_size_mb = Path(output_file).stat().st_size / (1024 * 1024)
-            logger.info(f"Recording gespeichert: {output_file} ({file_size_mb:.2f}MB, {len(self.recording_frames)} frames)")
+            recording_type = "Baseline" if is_baseline else "Scan"
+            logger.info(f"Recording gespeichert ({recording_type}): {output_file} ({file_size_mb:.2f}MB, {len(self.recording_frames)} frames)")
             
             self.recording_file = output_file
             self.recording_frames = []  # Leere den Buffer
@@ -586,7 +636,9 @@ class CameraController:
     
     def start_recording_with_pupillometry(self, duration: float = 8.0, 
                                          led_on_delay: float = 1.0,
-                                         output_video: Optional[str] = None) -> Optional[str]:
+                                         output_video: Optional[str] = None,
+                                         is_baseline: bool = False,
+                                         patient_id: Optional[str] = None) -> Optional[str]:
         """
         Startet Recording mit 8-Sekunden Pupillometrie-Protokoll
         
@@ -594,6 +646,8 @@ class CameraController:
             duration: Aufnahmedauer in Sekunden (default: 8.0)
             led_on_delay: Verzögerung bis LED AN in Sekunden (default: 1.0)
             output_video: Output MP4 Datei (wenn None, wird automatisch generiert)
+            is_baseline: True für Baseline-Aufnahme (GLEICHER LED-Stimulus wie Normal!)
+            patient_id: Patient-Kennung für Folder-Speicherung
             
         Returns:
             Pfad zur gespeicherten Datei oder None bei Fehler
@@ -608,6 +662,7 @@ class CameraController:
         
         try:
             self.is_recording = True
+            self.recording_is_baseline = is_baseline
             self.stop_recording_requested = False
             self.manual_stop = False
             self.recording_frames = []
@@ -618,10 +673,11 @@ class CameraController:
             width = int(self.capture.get(cv2.CAP_PROP_FRAME_WIDTH))
             height = int(self.capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
             
-            logger.info(f"Starte Pupillometrie-Recording: {duration}s mit LED-Stimulus bei {led_on_delay}s")
+            recording_type = "Baseline" if is_baseline else "Pupillometrie"
+            logger.info(f"Starte {recording_type}-Recording: {duration}s (patient_id={patient_id})")
             
             # Recording-Schleife
-            LED_ON_DURATION = 0.5
+            LED_ON_DURATION = 1.0  # Korrekt: 1.0-2.0s (nicht 1.0-1.5s)
             frame_count = 0
             start_time = time.time()
             led_activated = False
@@ -632,16 +688,16 @@ class CameraController:
             while (time.time() - start_time) < duration and not self.stop_recording_requested:
                 elapsed = time.time() - start_time
                 
-                # LED-Stimulus
+                # LED-Stimulus bei 1.0-2.0s für BEIDE Baseline und Normal
                 if led_on_delay <= elapsed < (led_on_delay + LED_ON_DURATION):
                     if not led_activated:
                         self.led_on()
                         led_activated = True
-                        logger.info(f"LED AN bei {elapsed:.2f}s")
+                        logger.info(f"LED ON bei {elapsed:.2f}s")
                 elif led_activated and elapsed >= (led_on_delay + LED_ON_DURATION):
                     self.led_off()
                     led_activated = False
-                    logger.info(f"LED AUS bei {elapsed:.2f}s")
+                    logger.info(f"LED OFF bei {elapsed:.2f}s")
                 
                 # Capture Frame (with lock for thread safety)
                 if self.capture_lock:
@@ -667,10 +723,12 @@ class CameraController:
                 return None  # Wird vom UI behandelt
             else:
                 # Auto-Stop - speichern
-                return self._save_recording_to_file(output_video)
+                result = self._save_recording_to_file(output_video, is_baseline=is_baseline, patient_id=patient_id)
+                self.is_recording = False  # CRITICAL: Reset flag after save completes
+                return result
         
         except Exception as e:
-            logger.error(f"Fehler in Pupillometrie-Recording: {e}")
+            logger.error(f"Fehler in {recording_type}-Recording: {e}")
             self.is_recording = False
             self.led_off()
             return None

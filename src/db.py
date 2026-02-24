@@ -403,32 +403,44 @@ class PatientDataManager:
 
     def get_recordings(self, patient_id: str) -> List[Dict[str, Any]]:
         """
-        Retrieve all recordings for a patient by scanning physical files in data/recordings/.
+        Retrieve all recordings for a specific patient from data/recordings/{patient_id}/.
         
-        This approach ensures only recordings with actual video files are shown,
-        avoiding orphaned database entries pointing to deleted files.
+        Each patient has their own folder containing only their video files.
+        This ensures recordings are properly isolated per patient.
+        
+        Scans physical files directly to ensure only actual videos are returned,
+        avoiding orphaned database entries.
         
         Returns recordings sorted by modification time (newest first).
+        
+        Args:
+            patient_id: The patient ID (folder name under data/recordings/)
+            
+        Returns:
+            List of recording dicts with keys: id, patientId, date, baseline, file_path
         """
         from pathlib import Path
-        import os
         
-        recordings_dir = Path("data/recordings")
+        # Each patient has their own folder
+        patient_recordings_dir = Path("data/recordings") / str(patient_id)
         recordings = []
         
-        # Scan for all MP4 files in data/recordings/
-        if recordings_dir.exists():
-            for video_file in sorted(recordings_dir.glob("*.mp4"), reverse=True):
+        # Scan only this patient's recording folder
+        if patient_recordings_dir.exists():
+            for video_file in sorted(patient_recordings_dir.glob("*.mp4"), reverse=True):
                 # Create recording info from file
                 rec_id = video_file.stem  # Filename without .mp4
-                file_path = str(video_file)
+                file_path = str(video_file)  # Full path to the file
                 file_mtime = int(video_file.stat().st_mtime)
                 
+                # Determine if baseline based on filename pattern
+                is_baseline = 1 if "baseline" in rec_id else 0
+                
                 recording = {
-                    'id': rec_id,
+                    'id': file_path,  # CRITICAL: Use full file path, not just filename!
                     'patientId': patient_id,
                     'date': file_mtime,
-                    'baseline': 0,
+                    'baseline': is_baseline,
                     'file_path': file_path
                 }
                 recordings.append(recording)
@@ -604,11 +616,15 @@ class PatientDataManager:
                         tbi_filename = str(tbi_recording_id).split("/")[-1]  # Get filename only
                         
                         if tbi_filename in video_mapping:
-                            # Use mapped local path (if provided)
-                            local_recording_id = video_mapping[tbi_filename]
+                            # NEW: Use new mapping format (patient_id, local_path)
+                            tbi_video_patient_id, local_recording_id = video_mapping[tbi_filename]
+                            # Verify mapping patient matches recording patient
+                            if tbi_video_patient_id != tbi_patient_id:
+                                result['errors'].append(f"Recording {tbi_recording_id}: Patient mismatch in video mapping")
+                                result['skipped_recordings'] += 1
+                                continue
                         else:
-                            # Generate recording ID from timestamp
-                            # If no timestamp, create based on current time
+                            # Generate recording ID from timestamp if not mapped
                             local_recording_id = self.generate_recording_id(date if date > 0 else None)
                         
                         # Insert recording into our system

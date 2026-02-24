@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QSpinBox, QDoubleSpinBox, QComboBox
 )
 from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtCore import Qt, QThread, pyqtSignal
+from PySide6.QtCore import Qt, QThread, Signal
 from typing import List, Dict, Optional
 import logging
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 class PupilFrameWidget(QWidget):
     """Single thumbnail frame with pupil detection info."""
     
-    clicked = pyqtSignal(int, dict)  # frame_number, frame_data
+    clicked = Signal(int, dict)  # frame_number, frame_data
     
     def __init__(self, frame_number: int, image_data: np.ndarray, 
                  pupil_diameter: float = None, confidence: float = 0.0):
@@ -138,10 +138,19 @@ class DetailViewDialog(QDialog):
         display_image = image.copy()
         
         h, w = display_image.shape[:2]
-        center_x, center_y = w // 2, h // 2
         
-        if position:
-            center_x, center_y = int(position[0]), int(position[1])
+        # Use provided position if available and valid
+        if position and len(position) >= 2 and not np.isnan(position[0]) and not np.isnan(position[1]):
+            center_x = int(position[0])
+            center_y = int(position[1])
+        else:
+            # Fallback to center if position is invalid
+            center_x, center_y = w // 2, h // 2
+            logger.warning(f"Invalid position {position}, using center: ({center_x}, {center_y})")
+        
+        # Clamp coordinates to image bounds
+        center_x = max(0, min(center_x, w - 1))
+        center_y = max(0, min(center_y, h - 1))
         
         radius = int(diameter / 2)
         
@@ -152,11 +161,12 @@ class DetailViewDialog(QDialog):
         cv2.line(display_image, (center_x - radius, center_y),
                 (center_x + radius, center_y), (0, 255, 0), 3)
         
-        # Draw horizontal crosshair
-        cv2.line(display_image, (center_x - 20, center_y),
-                (center_x + 20, center_y), (255, 0, 0), 1)
-        cv2.line(display_image, (center_x, center_y - 20),
-                (center_x, center_y + 20), (255, 0, 0), 1)
+        # Draw crosshair (blue/cyan)
+        crosshair_size = 30
+        cv2.line(display_image, (center_x - crosshair_size, center_y),
+                (center_x + crosshair_size, center_y), (0, 255, 255), 2)
+        cv2.line(display_image, (center_x, center_y - crosshair_size),
+                (center_x, center_y + crosshair_size), (0, 255, 255), 2)
         
         # Add text label
         label = f"Ø {diameter:.1f}px"
@@ -176,6 +186,8 @@ class DetailViewDialog(QDialog):
 
 class PLRTestScreen(QWidget):
     """Main PLR test analysis screen with frame grid and analysis options."""
+    
+    back_clicked = Signal()  # Signal emitted when back button is clicked
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -217,6 +229,12 @@ class PLRTestScreen(QWidget):
         self.progress_bar.setVisible(False)
         control_layout.addWidget(self.progress_bar)
         
+        # Add spacer and back button
+        control_layout.addSpacing(20)
+        self.back_btn = QPushButton("Back")
+        self.back_btn.clicked.connect(self.back_clicked.emit)
+        control_layout.addWidget(self.back_btn)
+        
         layout.addLayout(control_layout)
         
         # Frame grid area with scroll
@@ -250,7 +268,7 @@ class PLRTestScreen(QWidget):
             self.status_label.setText(f"Loaded: {file_path.split('/')[-1]}")
     
     def run_analysis(self):
-        """Run YOLO analysis on key frames from video."""
+        """Run pupil analysis on video using improved detection."""
         if not self.current_video_path:
             self.status_label.setText("❌ No video loaded")
             return
@@ -258,55 +276,79 @@ class PLRTestScreen(QWidget):
         from src.pupil_analyzer import PupilAnalyzer
         
         try:
-            self.status_label.setText("🔄 Extracting key frames...")
+            self.status_label.setText("🔄 Analyzing video frames...")
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
             
-            # Extract key frames
-            analyzer = PupilAnalyzer(model_name="yolov8n", use_onnx=True)
+            # Use the improved PupilAnalyzer with classical CV detection
+            analyzer = PupilAnalyzer(model_name="yolov8n", use_onnx=False)
             
-            # Get video properties
+            # Extract frames from video (process all frames)
             cap = cv2.VideoCapture(self.current_video_path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             
-            num_key_frames = self.frame_count_spin.value()
-            frame_indices = np.linspace(0, total_frames - 1, num_key_frames, dtype=int)
+            # Determine how many frames to display (every nth frame for performance)
+            num_display_frames = self.frame_count_spin.value()
+            frame_pool = max(1, total_frames // num_display_frames)
             
+            # Analyze all frames but only display key frames
+            analyzer.extract_frames_from_video(
+                self.current_video_path,
+                frame_pool=frame_pool,
+                max_frames=None
+            )
+            
+            # Build display data from analyzed frames
             key_frames_data = []
+            frame_count = 0
+            cap = cv2.VideoCapture(self.current_video_path)
             
-            for i, frame_idx in enumerate(frame_indices):
-                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            for pupil_frame in analyzer.pupil_frames:
+                # Set frame position and read
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pupil_frame.frame_number)
                 ret, frame = cap.read()
                 
                 if ret:
-                    # Run YOLO inference
-                    results = analyzer.model(frame, conf=0.5)
+                    # Check for valid detection BEFORE converting to int
+                    diameter = pupil_frame.diameter_px
+                    confidence = pupil_frame.confidence
+                    position_x = pupil_frame.position_x
+                    position_y = pupil_frame.position_y
                     
-                    # Extract pupil diameter (placeholder for now)
-                    diameter = 35.0 + np.random.randn() * 2  # Synthetic for now
-                    confidence = 0.9
+                    # Skip frames with NaN values (undetected pupils)
+                    if np.isnan(diameter) or np.isnan(position_x) or np.isnan(position_y):
+                        logger.warning(f"Skipping frame {pupil_frame.frame_number}: No pupil detected (NaN values)")
+                        continue
+                    
+                    # Now safe to convert to int
+                    position = (int(position_x), int(position_y))
                     
                     key_frames_data.append({
-                        'frame_number': frame_idx,
+                        'frame_number': pupil_frame.frame_number,
                         'image': frame,
                         'diameter': diameter,
                         'confidence': confidence,
-                        'position': (frame.shape[1] // 2, frame.shape[0] // 2)
+                        'position': position
                     })
                 
-                progress = int((i / len(frame_indices)) * 100)
+                # Progress bar
+                progress = int((frame_count / len(analyzer.pupil_frames)) * 100)
                 self.progress_bar.setValue(progress)
+                frame_count += 1
             
             cap.release()
             
             self.current_frames = key_frames_data
             self.display_frame_grid()
             
-            self.status_label.setText(f"✅ Analysis complete - {len(key_frames_data)} key frames")
+            self.status_label.setText(f"✅ Analysis complete - {len(key_frames_data)} frames analyzed")
             self.progress_bar.setVisible(False)
+            logger.info(f"Analyzed {len(analyzer.pupil_frames)} frames, displayed {len(key_frames_data)}")
             
         except Exception as e:
             logger.error(f"Analysis error: {e}")
+            import traceback
+            traceback.print_exc()
             self.status_label.setText(f"❌ Error: {str(e)}")
             self.progress_bar.setVisible(False)
     

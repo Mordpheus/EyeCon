@@ -1,5 +1,6 @@
 from pathlib import Path
 from datetime import datetime
+from typing import Optional
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider, QFileDialog
@@ -14,6 +15,7 @@ from patient_widgets import DeleteConfirmDialog, EditPatientDialog, PatientListW
 from data_manager import PatientDataManager
 from src.importer import TBIHeadsetImporter
 from src.camera_controller import CameraController
+from src.plr_test_screen import PLRTestScreen
 
 
 # -------------------------------------------------
@@ -24,9 +26,11 @@ class RecordingWorker(QThread):
     recording_finished = Signal(str)  # Emits: "success:<filepath>" oder "manual_stop"
     recording_progress = Signal(float, int)  # Emits: (elapsed_time, frame_count)
     
-    def __init__(self, camera_controller):
+    def __init__(self, camera_controller, is_baseline: bool = False, patient_id: Optional[str] = None):
         super().__init__()
         self.camera_controller = camera_controller
+        self.is_baseline = is_baseline
+        self.patient_id = patient_id
     
     def run(self):
         """
@@ -35,7 +39,9 @@ class RecordingWorker(QThread):
         result = self.camera_controller.start_recording_with_pupillometry(
             duration=8.0,
             led_on_delay=1.0,
-            output_video=None  # Wird automatisch generiert
+            output_video=None,  # Wird automatisch generiert
+            is_baseline=self.is_baseline,
+            patient_id=self.patient_id
         )
         
         # Überprüfe ob manuell gestoppt wurde
@@ -493,29 +499,23 @@ class RecordingPlayerScreen(QWidget):
         # === Aufnahmekontrolle ===
         controls_layout.addSpacing(20)
         
-        self.start_recording_btn = QPushButton("🔴 REC STARTEN")
-        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
-        self.start_recording_btn.clicked.connect(self._on_start_recording)
-        controls_layout.addWidget(self.start_recording_btn)
+        # === Normal Recording Button ===
+        self.start_normal_recording_btn = QPushButton("🔴 Normal Recording")
+        self.start_normal_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.start_normal_recording_btn.clicked.connect(lambda: self._on_start_recording(is_baseline=False))
+        controls_layout.addWidget(self.start_normal_recording_btn)
+        
+        # === Baseline Recording Button ===
+        self.start_baseline_recording_btn = QPushButton("🔵 Baseline Recording")
+        self.start_baseline_recording_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
+        self.start_baseline_recording_btn.clicked.connect(lambda: self._on_start_recording(is_baseline=True))
+        controls_layout.addWidget(self.start_baseline_recording_btn)
         
         self.stop_recording_btn = QPushButton("⏹ REC STOPP")
         self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
         self.stop_recording_btn.setEnabled(False)
         self.stop_recording_btn.clicked.connect(self._on_stop_recording)
         controls_layout.addWidget(self.stop_recording_btn)
-        
-        # === LED Teststeuerung ===
-        controls_layout.addSpacing(20)
-        
-        self.led_on_btn = QPushButton("💡 LED AN")
-        self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white;")
-        self.led_on_btn.clicked.connect(self._on_led_on)
-        controls_layout.addWidget(self.led_on_btn)
-        
-        self.led_off_btn = QPushButton("💡 LED AUS")
-        self.led_off_btn.setStyleSheet("background-color: #444444; color: white;")
-        self.led_off_btn.clicked.connect(self._on_led_off)
-        controls_layout.addWidget(self.led_off_btn)
         
         controls_layout.addStretch()
         
@@ -862,8 +862,15 @@ class RecordingPlayerScreen(QWidget):
         except Exception as e:
             print(f"[RecordingPlayerScreen._on_preview_timer] Error: {e}")
     
-    def _on_start_recording(self):
-        """Start recording video from camera (8-second Pupillometry Protocol)."""
+    def _on_start_recording(self, is_baseline: bool = False):
+        """Start recording video from camera (Normal or Baseline). 
+        
+        Args:
+            is_baseline: True für Baseline-Aufnahme, False für normales Recording
+        """
+        recording_type = "Baseline" if is_baseline else "Normal"
+        print(f"[RecordingPlayerScreen._on_start_recording] Starting {recording_type} recording...")
+        
         # Check if camera controller exists
         if not self.camera_controller:
             self.recording_info.setText("✗ Fehler: Kamera-Controller nicht verfügbar!")
@@ -882,11 +889,13 @@ class RecordingPlayerScreen(QWidget):
             return
         
         try:
-            print("[RecordingPlayerScreen] Starting recording...")
-            # Deaktiviere Start-Button
+            print(f"[RecordingPlayerScreen._on_start_recording] {recording_type} recording - initializing...")
+            # Deaktiviere Start-Buttons
             self.is_recording = True
-            self.start_recording_btn.setEnabled(False)
-            self.start_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
+            self.start_normal_recording_btn.setEnabled(False)
+            self.start_normal_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
+            self.start_baseline_recording_btn.setEnabled(False)
+            self.start_baseline_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
             self.stop_recording_btn.setEnabled(True)
             self.stop_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
             
@@ -895,10 +904,19 @@ class RecordingPlayerScreen(QWidget):
                 self.recording_info.setText("✗ Recording läuft bereits!")
                 return
             
-            # Start recording in separate thread
-            self.recording_worker = RecordingWorker(self.camera_controller)
+            # Get current patient (if any)
+            patient_id = None
+            if hasattr(self, 'current_patient_id') and self.current_patient_id:
+                patient_id = self.current_patient_id
+            
+            print(f"[RecordingPlayerScreen._on_start_recording] Creating RecordingWorker: is_baseline={is_baseline}, patient_id={patient_id}")
+            
+            # Start recording in separate thread with baseline flag and patient_id
+            self.recording_worker = RecordingWorker(self.camera_controller, is_baseline=is_baseline, patient_id=patient_id)
             self.recording_worker.recording_finished.connect(self._on_recording_finished)
             self.recording_worker.start()
+            
+            print(f"[RecordingPlayerScreen._on_start_recording] Worker thread started")
             
             # Switch to live preview display
             self.video_stack.setCurrentIndex(1)
@@ -906,13 +924,19 @@ class RecordingPlayerScreen(QWidget):
             # Start timer to poll for new frames
             self.preview_timer.start(50)  # Poll every 50ms
             
-            self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus bei 1.0-1.5s)")
+            if is_baseline:
+                self.recording_info.setText("🔵 BASELINE RECORDING: 8 Sekunden läuft... (LED-Stimulus 1.0-2.0s)")
+            else:
+                self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus 1.0-2.0s)")
             
         except Exception as e:
-            print(f"[RecordingPlayerScreen] EXCEPTION: {str(e)}")
+            import traceback
+            print(f"[RecordingPlayerScreen._on_start_recording] EXCEPTION: {str(e)}")
+            traceback.print_exc()
             self.recording_info.setText(f"✗ Fehler beim Starten der Aufnahme: {str(e)}")
             self.is_recording = False
-            self.start_recording_btn.setEnabled(True)
+            self.start_normal_recording_btn.setEnabled(True)
+            self.start_baseline_recording_btn.setEnabled(True)
             self.stop_recording_btn.setEnabled(False)
     
     def _on_stop_recording(self):
@@ -1034,6 +1058,10 @@ class RecordingPlayerScreen(QWidget):
                 file_path = self.camera_controller.recording_file
                 file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
                 
+                # Check if this is a baseline recording
+                is_baseline = getattr(self.camera_controller, 'recording_is_baseline', False)
+                baseline_value = 1 if is_baseline else 0
+                
                 # Add recording to database if manager is available
                 if self.manager and self.current_patient_id:
                     from time import time
@@ -1045,9 +1073,11 @@ class RecordingPlayerScreen(QWidget):
                         recording_id=recording_id,
                         patient_id=self.current_patient_id,
                         date=current_timestamp,
-                        baseline=0
+                        baseline=baseline_value  # 1 if baseline, 0 if normal
                     )
-                    print(f"[RecordingPlayerScreen] Recording added to database: {recording_id}")
+                    
+                    recording_type = "Baseline" if is_baseline else "Normal"
+                    print(f"[RecordingPlayerScreen] {recording_type} recording added to database: {recording_id}")
                     
                     # Emit signal if callback is set
                     if self.on_recordings_updated:
@@ -1055,7 +1085,7 @@ class RecordingPlayerScreen(QWidget):
                         self.on_recordings_updated(recordings)
                     
                     self.recording_info.setText(
-                        f"[OK] Recording erfolgreich gespeichert und in Datenbank eingetragen:\n"
+                        f"[OK] {recording_type} recording gespeichert und in Datenbank eingetragen:\n"
                         f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
                     )
                 else:
@@ -1074,8 +1104,10 @@ class RecordingPlayerScreen(QWidget):
         
         # Reset button states
         self.is_recording = False
-        self.start_recording_btn.setEnabled(True)
-        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.start_normal_recording_btn.setEnabled(True)
+        self.start_normal_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.start_baseline_recording_btn.setEnabled(True)
+        self.start_baseline_recording_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
         self.stop_recording_btn.setEnabled(False)
         self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
     
@@ -1084,37 +1116,29 @@ class RecordingPlayerScreen(QWidget):
         Wird aufgerufen wenn Recording-Thread fertig ist
         result: "success:<filepath>" oder "manual_stop" oder "error"
         """
+        print(f"[RecordingPlayerScreen] _on_recording_finished called: {result}")
+        
         # Stop preview timer and switch back to video player
         self.preview_timer.stop()
         self.video_stack.setCurrentIndex(0)
         
         if result.startswith("success:"):
             filepath = result.split(":", 1)[1]
+            print(f"[RecordingPlayerScreen] Recording successful: {filepath}")
             self._complete_recording()
+            # CRITICAL: Refresh video list AFTER recording completes
+            print(f"[RecordingPlayerScreen] Refreshing recordings list...")
+            self._refresh_recordings_list()
         elif result == "manual_stop":
             # Wird bereits in _on_stop_recording() behandelt
-            pass
+            print(f"[RecordingPlayerScreen] Recording manually stopped")
         else:  # "error"
+            print(f"[RecordingPlayerScreen] ERROR in recording: {result}")
             self.recording_info.setText("✗ Fehler beim Recording!")
             self.is_recording = False
-            self.start_recording_btn.setEnabled(True)
+            self.start_normal_recording_btn.setEnabled(True)
+            self.start_baseline_recording_btn.setEnabled(True)
             self.stop_recording_btn.setEnabled(False)
-    
-    def _on_led_on(self):
-        """LED über Raspberry Pi anschalten."""
-        if self.camera_controller.led_on():
-            self.led_on_btn.setStyleSheet("background-color: #ffdd44; color: black; font-weight: bold;")
-            self.details_label.setText("💡 LED: AN")
-        else:
-            self.details_label.setText("✗ LED-Fehler: LED konnte nicht angeschaltet werden. Serial-Verbindung prüfen.")
-    
-    def _on_led_off(self):
-        """LED über Raspberry Pi ausschalten."""
-        if self.camera_controller.led_off():
-            self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white;")
-            self.details_label.setText("💡 LED: AUS")
-        else:
-            self.details_label.setText("✗ LED-Fehler: LED konnte nicht ausgeschaltet werden. Serial-Verbindung prüfen.")
     
     def on_timeline_moved(self, value: int) -> None:
         """Handle user scrubbing on timeline slider."""
@@ -1818,6 +1842,18 @@ class CenterArea(QWidget):
         button_row.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
 
         layout.addWidget(self.button_container)
+        
+        # --- Separate PLR button bar (always visible, not hidden) ---
+        plr_bar_container = QWidget()
+        plr_bar = QHBoxLayout(plr_bar_container)
+        plr_bar.setContentsMargins(0, 0, 0, 0)
+        
+        plr_bar.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
+        self.btn_plr_test = QPushButton("PLR Analysis")
+        self.btn_plr_test.setMaximumWidth(150)
+        plr_bar.addWidget(self.btn_plr_test)
+        
+        layout.addWidget(plr_bar_container)
 
         # === STACKED WIDGET: Switch between different screens ===
         self.stacked_widget = QStackedWidget()
@@ -1839,6 +1875,10 @@ class CenterArea(QWidget):
         self.settings_screen = SettingsScreen(camera_controller=self.camera_controller)
         self.stacked_widget.addWidget(self.settings_screen)
         
+        # Screen 4: PLR Test Analysis
+        self.plr_test_screen = PLRTestScreen()
+        self.stacked_widget.addWidget(self.plr_test_screen)
+        
         # Show patient list by default
         self.stacked_widget.setCurrentIndex(0)
         
@@ -1858,9 +1898,13 @@ class CenterArea(QWidget):
         self.btn_create.clicked.connect(self._on_create_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.btn_edit.clicked.connect(self._on_edit_clicked)
+        self.btn_plr_test.clicked.connect(self._on_plr_test_clicked)
         
         # Connect recording player back button
         self.recording_player.back_clicked.connect(self._on_recording_back_clicked)
+        
+        # Connect PLR test screen back button
+        self.plr_test_screen.back_clicked.connect(self._on_recording_back_clicked)
 
     def _on_patient_selected(self, patient_id: str) -> None:
         """
@@ -2048,6 +2092,14 @@ Möchten Sie erneut versuchen?"""
             
             except Exception as e:
                 QMessageBox.critical(self, "Fehler", f"Fehler beim Aktualisieren:\n\n{str(e)}")
+    
+    def _on_plr_test_clicked(self) -> None:
+        """
+        Handle PLR Test Analysis button click.
+        Opens the PLR test screen for pupil detection analysis.
+        """
+        # Switch to PLR test screen (index 4)
+        self.stacked_widget.setCurrentIndex(4)
     
     def _on_recording_back_clicked(self) -> None:
         """

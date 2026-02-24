@@ -121,6 +121,93 @@ class PatientDataManager:
             )
             """
         )
+        
+        # === NEW: Pupil Frame Data Table ===
+        # Stores per-frame pupil detection results from YOLO
+        # One row per analyzed frame in a video
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pupil_frame (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recording_id TEXT NOT NULL,
+                frame_number INTEGER NOT NULL,
+                timestamp REAL NOT NULL,
+                diameter_px REAL NOT NULL,
+                position_x REAL NOT NULL,
+                position_y REAL NOT NULL,
+                confidence REAL NOT NULL,
+                eye_area_px INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (recording_id) REFERENCES recording(id) ON DELETE CASCADE,
+                UNIQUE(recording_id, frame_number)
+            )
+            """
+        )
+        
+        # === NEW: PLR Metrics Table ===
+        # Stores calculated PLR (Pupil Light Reflex) biomarkers for each recording
+        # One row per analyzed recording (after stimulus detection)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS plr_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recording_id TEXT NOT NULL UNIQUE,
+                
+                -- Baseline parameters
+                baseline_mean REAL NOT NULL,
+                baseline_max REAL NOT NULL,
+                baseline_min REAL NOT NULL,
+                
+                -- Latency (Bergamin-Kardon method)
+                latency REAL,
+                latency_frame_idx INTEGER,
+                
+                -- Constriction phase
+                peak_constriction_velocity REAL,
+                peak_constriction_velocity_frame INTEGER,
+                average_constriction_velocity REAL,
+                
+                -- Minimum diameter and amplitude
+                minimum_diameter REAL,
+                minimum_diameter_frame INTEGER,
+                amplitude REAL,
+                
+                -- Dilation phase
+                peak_dilation_velocity REAL,
+                peak_dilation_velocity_frame INTEGER,
+                average_dilation_velocity REAL,
+                
+                -- Pupil Recovery Time
+                prt_50 REAL,
+                prt_63 REAL,
+                prt_75 REAL,
+                
+                -- Metadata
+                light_stimulus_start_frame INTEGER,
+                light_stimulus_end_frame INTEGER,
+                analysis_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                
+                FOREIGN KEY (recording_id) REFERENCES recording(id) ON DELETE CASCADE
+            )
+            """
+        )
+        
+        # === NEW: Analysis Session Table ===
+        # Tracks analysis runs (for history and debugging)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recording_id TEXT NOT NULL,
+                analysis_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'completed',
+                frame_count INTEGER,
+                analyzed_frame_count INTEGER,
+                error_message TEXT,
+                FOREIGN KEY (recording_id) REFERENCES recording(id) ON DELETE CASCADE
+            )
+            """
+        )
 
         self.conn.commit()
 
@@ -524,3 +611,172 @@ class PatientDataManager:
             result['errors'].append(f"Failed to open TBI database: {str(e)}")
         
         return result
+    
+    # ========== NEW: Pupil Analysis Methods ==========
+    
+    def save_pupil_frames(self, recording_id: str, pupil_frames: List[Dict[str, Any]]) -> int:
+        """
+        Save pupil detection results (per-frame) to database.
+        
+        Args:
+            recording_id: Recording ID to associate frames with
+            pupil_frames: List of frame dicts with keys:
+                         {frame_number, timestamp, diameter_px, position_x, position_y, confidence, eye_area_px}
+        
+        Returns:
+            Number of frames successfully saved
+        """
+        if not self.conn:
+            return 0
+        
+        cursor = self.conn.cursor()
+        saved_count = 0
+        
+        try:
+            for frame_data in pupil_frames:
+                cursor.execute("""
+                    INSERT OR REPLACE INTO pupil_frame
+                    (recording_id, frame_number, timestamp, diameter_px, position_x, position_y, confidence, eye_area_px)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    recording_id,
+                    frame_data.get('frame_number'),
+                    frame_data.get('timestamp'),
+                    frame_data.get('diameter_px'),
+                    frame_data.get('position_x'),
+                    frame_data.get('position_y'),
+                    frame_data.get('confidence'),
+                    frame_data.get('eye_area_px')
+                ))
+                saved_count += 1
+            
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error saving pupil frames: {e}")
+            self.conn.rollback()
+        
+        return saved_count
+    
+    def save_plr_metrics(
+        self,
+        recording_id: str,
+        metrics: Dict[str, Any],
+        light_stimulus_start_frame: int,
+        light_stimulus_end_frame: int
+    ) -> bool:
+        """
+        Save calculated PLR biomarkers to database.
+        
+        Args:
+            recording_id: Recording ID
+            metrics: Dict with PLR parameters (from PLRMetrics dataclass)
+            light_stimulus_start_frame: Frame index of stimulus start
+            light_stimulus_end_frame: Frame index of stimulus end
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.conn:
+            return False
+        
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT OR REPLACE INTO plr_metrics (
+                    recording_id,
+                    baseline_mean, baseline_max, baseline_min,
+                    latency, latency_frame_idx,
+                    peak_constriction_velocity, peak_constriction_velocity_frame,
+                    average_constriction_velocity,
+                    minimum_diameter, minimum_diameter_frame, amplitude,
+                    peak_dilation_velocity, peak_dilation_velocity_frame,
+                    average_dilation_velocity,
+                    prt_50, prt_63, prt_75,
+                    light_stimulus_start_frame, light_stimulus_end_frame
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                recording_id,
+                metrics.get('baseline_mean'),
+                metrics.get('baseline_max'),
+                metrics.get('baseline_min'),
+                metrics.get('latency'),
+                metrics.get('latency_frame_idx'),
+                metrics.get('peak_constriction_velocity'),
+                metrics.get('peak_constriction_velocity_frame'),
+                metrics.get('average_constriction_velocity'),
+                metrics.get('minimum_diameter'),
+                metrics.get('minimum_diameter_frame'),
+                metrics.get('amplitude'),
+                metrics.get('peak_dilation_velocity'),
+                metrics.get('peak_dilation_velocity_frame'),
+                metrics.get('average_dilation_velocity'),
+                metrics.get('prt_50'),
+                metrics.get('prt_63'),
+                metrics.get('prt_75'),
+                light_stimulus_start_frame,
+                light_stimulus_end_frame
+            ))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error saving PLR metrics: {e}")
+            self.conn.rollback()
+            return False
+    
+    def get_pupil_frames(self, recording_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all pupil frames for a recording."""
+        if not self.conn:
+            return []
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT frame_number, timestamp, diameter_px, position_x, position_y, confidence, eye_area_px
+            FROM pupil_frame
+            WHERE recording_id = ?
+            ORDER BY frame_number ASC
+        """, (recording_id,))
+        
+        return [dict(row) for row in cursor.fetchall()]
+    
+    def get_plr_metrics(self, recording_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve PLR metrics for a recording."""
+        if not self.conn:
+            return None
+        
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT * FROM plr_metrics WHERE recording_id = ?
+        """, (recording_id,))
+        
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    
+    def create_analysis_session(
+        self,
+        recording_id: str,
+        frame_count: int,
+        analyzed_frame_count: int,
+        status: str = "completed",
+        error_message: Optional[str] = None
+    ) -> int:
+        """Create analysis session record for tracking."""
+        if not self.conn:
+            return -1
+        
+        cursor = self.conn.cursor()
+        
+        try:
+            cursor.execute("""
+                INSERT INTO analysis_session
+                (recording_id, frame_count, analyzed_frame_count, status, error_message)
+                VALUES (?, ?, ?, ?, ?)
+            """, (recording_id, frame_count, analyzed_frame_count, status, error_message))
+            
+            self.conn.commit()
+            return cursor.lastrowid
+        except Exception as e:
+            print(f"Error creating analysis session: {e}")
+            self.conn.rollback()
+            return -1
+

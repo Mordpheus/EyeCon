@@ -11,6 +11,8 @@ Handles ZIP import workflow:
 import zipfile
 import tempfile
 import shutil
+import sqlite3
+import logging
 from pathlib import Path
 from typing import Dict, Any, Tuple
 
@@ -18,7 +20,8 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 from src.db import PatientDataManager
 from src.patients_dialog import DuplicatePatientDialog
 
-
+# Setup logging
+logger = logging.getLogger(__name__)
 class TBIHeadsetImporter:
     """Import patient data from TBI_Headset database exports (ZIP format)."""
 
@@ -97,43 +100,113 @@ class TBIHeadsetImporter:
 
     def copy_recordings_to_project(self, temp_dir: str) -> Tuple[Dict[str, str], list]:
         """
-        Copy video files from TBI export to project recordings folder.
+        Copy video files from TBI export to project recordings folder with patient-based organization.
         
-        Finds all videos in TBI recordings/ folder and copies them to data/recordings/.
-        Maps original TBI recording IDs to new local file paths.
+        Workflow:
+        1. Find patient_database.db and read recording→patient mappings
+        2. For each video in recordings/ folder:
+           - Find patient_id from recording table
+           - Extract video timestamp from metada or creation time
+           - Rename to {timestamp}_scan_X.mp4 format
+           - Copy to data/recordings/{patient_id}/
+        3. Detect collisions: same timestamp → overwrite (same video re-imported)
         
-        Args:
-            temp_dir: Path to extraction directory containing recordings/
-            
         Returns:
-            Tuple (mapping: dict of recording_id→local_path, errors: list)
+            Tuple (mapping: dict of recording_id→(patient_id, local_path), errors: list)
         """
         mapping = {}
         errors = []
         
         try:
-            # Create recordings directory if it doesn't exist
+            # Create base recordings directory
             recordings_dir = Path("data/recordings")
             recordings_dir.mkdir(parents=True, exist_ok=True)
             
-            # Find recordings directory in extracted ZIP
+            # Find TBI recordings directory in extracted ZIP
             tbi_recordings_dir = Path(temp_dir) / "recordings"
             if not tbi_recordings_dir.exists():
                 errors.append(f"No 'recordings' directory found in ZIP at {tbi_recordings_dir}")
                 return mapping, errors
             
-            # Copy all video files from recordings/ to data/recordings/
+            # Step 1: Read TBI database to get recording→patient mappings
+            db_path = self.find_patient_database(temp_dir)
+            if not db_path:
+                errors.append("patient_database.db not found - cannot determine patient-video mappings")
+                return mapping, errors
+            
+            # Open TBI database to read recordings and patient associations
+            import sqlite3
+            tbi_conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+            tbi_conn.row_factory = sqlite3.Row
+            tbi_cur = tbi_conn.cursor()
+            
+            # Map: video_filename → (patient_id, baseline_flag)
+            video_patient_map = {}
+            
+            try:
+                # Read recordings from TBI database
+                tbi_cur.execute("SELECT * FROM recording")
+                tbi_recordings = tbi_cur.fetchall()
+                
+                for tbi_rec in tbi_recordings:
+                    rec_dict = dict(tbi_rec)
+                    video_id = rec_dict.get('id')  # Usually filename like "scan_001.mp4"
+                    patient_id = rec_dict.get('patientId')
+                    baseline = rec_dict.get('baseline', 0)
+                    
+                    if video_id and patient_id:
+                        video_patient_map[video_id] = (str(patient_id), int(baseline))
+                
+            except Exception as e:
+                errors.append(f"Error reading TBI recording table: {str(e)}")
+            finally:
+                tbi_conn.close()
+            
+            # Step 2: Copy videos with timestamp-based naming to patient folders
+            scan_counters = {}  # Track scan numbers per patient
+            
             for video_file in tbi_recordings_dir.rglob("*"):
                 if video_file.is_file() and video_file.suffix.lower() in [".mp4", ".avi", ".mov", ".mkv"]:
                     try:
-                        # Use recording filename as key
-                        local_path = recordings_dir / video_file.name
+                        video_filename = video_file.name
                         
-                        # Copy file to project
+                        # Get patient_id and baseline flag from database
+                        patient_id, is_baseline = video_patient_map.get(video_filename, (None, 0))
+                        
+                        if not patient_id:
+                            errors.append(f"Video {video_filename} not found in TBI recording table, skipping")
+                            continue
+                        
+                        # Create patient-specific directory
+                        patient_recordings_dir = recordings_dir / str(patient_id)
+                        patient_recordings_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        # Extract timestamp from file creation time (Unix timestamp)
+                        # Use current time if metadata not available
+                        unix_timestamp = int(video_file.stat().st_mtime)
+                        
+                        # Generate new filename with timestamp
+                        if is_baseline:
+                            # Baseline: {timestamp}_baseline.mp4
+                            new_filename = f"{unix_timestamp}_baseline.mp4"
+                        else:
+                            # Normal scan: {timestamp}_scan_{counter}.mp4
+                            if patient_id not in scan_counters:
+                                scan_counters[patient_id] = 1
+                            else:
+                                scan_counters[patient_id] += 1
+                            
+                            new_filename = f"{unix_timestamp}_scan_{scan_counters[patient_id]}.mp4"
+                        
+                        local_path = patient_recordings_dir / new_filename
+                        
+                        # Copy file (overwrites if same timestamp)
                         shutil.copy2(video_file, local_path)
                         
-                        # Store mapping: original ID → local path
-                        mapping[str(video_file.name)] = str(local_path)
+                        # Store mapping: original_id → (patient_id, local_path)
+                        mapping[str(video_filename)] = (str(patient_id), str(local_path))
+                        
+                        logger.info(f"Copied {video_filename} → {patient_id}/{new_filename}")
                         
                     except Exception as e:
                         errors.append(f"Failed to copy {video_file.name}: {str(e)}")
@@ -143,6 +216,7 @@ class TBIHeadsetImporter:
             
         except Exception as e:
             errors.append(f"Error copying recordings: {str(e)}")
+            logger.error(f"Error in copy_recordings_to_project: {e}")
         
         return mapping, errors
 

@@ -245,7 +245,7 @@ class PupilAnalyzer:
                 x, y, r = circle
                 
                 # Only consider circles in realistic pupil size range
-                if 8 < r < 55:  # Pupils typically 15-50px radius (30-100px diameter)
+                if 8 < r < 55:  # Pupillen normalerweise sollten ca 15-70px radius haben (30-100px diameter)
                     # Measure darkness inside this circle
                     mask = np.zeros(enhanced.shape, dtype=np.uint8)
                     cv2.circle(mask, (x, y), r, 255, -1)
@@ -269,7 +269,9 @@ class PupilAnalyzer:
                 mask = np.zeros(enhanced.shape, dtype=np.uint8)
                 cv2.circle(mask, (x, y), r, 255, -1)
                 mean_intensity = cv2.mean(enhanced, mask=mask)[0]
-                confidence = max(0.0, 1.0 - (mean_intensity / 150.0))  # Normalize to 150 (dark threshold)
+                # Increased normalization threshold from 150 to 200 for higher confidence on dark pixels
+                # Higher threshold = less strict = higher confidence values for target pupils
+                confidence = max(0.0, 1.0 - (mean_intensity / 200.0))  # Normalize to 200 (more lenient dark threshold)
                 
                 # Store frame data
                 self.pupil_frames.append(PupilFrame(

@@ -629,6 +629,21 @@ class PupilAnalyzer:
         diameters = np.array([f.diameter_px for f in self.pupil_frames])
         timestamps = np.array([f.timestamp for f in self.pupil_frames])
         
+        # Interpolate NaN values (missed detections) for smooth analysis
+        nan_mask = np.isnan(diameters)
+        nan_count = np.sum(nan_mask)
+        if nan_count > 0:
+            logger.info(f"Interpolating {nan_count} NaN frames ({100*nan_count/len(diameters):.0f}%)")
+            valid = ~nan_mask
+            if np.sum(valid) >= 2:
+                diameters[nan_mask] = np.interp(
+                    np.where(nan_mask)[0],
+                    np.where(valid)[0],
+                    diameters[valid]
+                )
+            else:
+                raise ValueError("Not enough valid detections for PLR analysis")
+        
         logger.info(f"Calculating PLR metrics...")
         logger.info(f"Stimulus: frames {light_stimulus_start_frame} to {light_stimulus_end_frame}")
         
@@ -651,10 +666,10 @@ class PupilAnalyzer:
         min_diameter = np.inf
         min_diameter_frame = light_stimulus_start_frame
         
-        peak_constr_vel = -np.inf  # Most negative (closing)
+        peak_constr_vel = np.inf  # Will be replaced by most negative velocity
         peak_constr_vel_frame = light_stimulus_start_frame
         
-        peak_dilat_vel = np.inf  # Most positive (opening)
+        peak_dilat_vel = -np.inf  # Will be replaced by most positive velocity
         peak_dilat_vel_frame = light_stimulus_end_frame
         
         # Calculate velocity using 3-point numerical derivative

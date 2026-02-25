@@ -205,6 +205,7 @@ class PLRTestScreen(QWidget):
     """Main PLR test analysis screen with frame grid and analysis options."""
     
     back_clicked = Signal()  # Signal emitted when back button is clicked
+    plr_results_ready = Signal(dict)  # Signal with PLR metrics for RightArea display
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -365,10 +366,38 @@ class PLRTestScreen(QWidget):
                 self.progress_bar.setValue(progress)
                 frame_count += 1
             
+            # Read FPS before releasing capture
+            fps = cap.get(cv2.CAP_PROP_FPS) or 20
             cap.release()
             
             self.current_frames = key_frames_data
             self.display_frame_grid()
+            
+            # === PLR BIOMARKER CALCULATION ===
+            self.status_label.setText("🔄 Calculating PLR biomarkers...")
+            self.progress_bar.setValue(90)
+            
+            try:
+                # Recording protocol: 0-1s IR baseline, 1-2s LED flash, 2-8s recovery
+                light_start_frame = int(1.0 * fps / frame_pool)
+                light_end_frame = int(2.0 * fps / frame_pool)
+                
+                # Clamp to valid range
+                n_frames = len(analyzer.pupil_frames)
+                light_start_frame = min(light_start_frame, n_frames - 2)
+                light_end_frame = min(light_end_frame, n_frames - 1)
+                
+                if light_start_frame > 0 and light_end_frame > light_start_frame:
+                    metrics = analyzer.calculate_plr_metrics(
+                        light_start_frame, light_end_frame
+                    )
+                    self._emit_results(metrics)
+                else:
+                    self.plr_results_ready.emit({'error': 'Not enough frames for PLR calculation.'})
+                    
+            except Exception as e:
+                logger.warning(f"PLR metrics calculation failed: {e}")
+                self.plr_results_ready.emit({'error': f'PLR calculation error: {str(e)}'})
             
             self.status_label.setText(f"✅ Analysis complete - {len(key_frames_data)} frames analyzed")
             self.progress_bar.setVisible(False)
@@ -424,3 +453,26 @@ class PLRTestScreen(QWidget):
                 parent=self
             )
             dialog.exec()
+    
+    def _emit_results(self, metrics):
+        """Package PLR metrics as dict and emit signal for RightArea display."""
+        results = {
+            'baseline_mean': metrics.baseline_mean,
+            'baseline_max': metrics.baseline_max,
+            'baseline_min': metrics.baseline_min,
+            'latency': metrics.latency,
+            'latency_frame_idx': metrics.latency_frame_idx,
+            'peak_constriction_velocity': metrics.peak_constriction_velocity,
+            'peak_constriction_velocity_frame': metrics.peak_constriction_velocity_frame,
+            'average_constriction_velocity': metrics.average_constriction_velocity,
+            'minimum_diameter': metrics.minimum_diameter,
+            'minimum_diameter_frame': metrics.minimum_diameter_frame,
+            'amplitude': metrics.amplitude,
+            'peak_dilation_velocity': metrics.peak_dilation_velocity,
+            'peak_dilation_velocity_frame': metrics.peak_dilation_velocity_frame,
+            'average_dilation_velocity': metrics.average_dilation_velocity,
+            'prt_50': metrics.prt_50,
+            'prt_63': metrics.prt_63,
+            'prt_75': metrics.prt_75,
+        }
+        self.plr_results_ready.emit(results)

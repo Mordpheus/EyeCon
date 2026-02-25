@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Optional
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider, QFileDialog
+    QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QSpacerItem, QSizePolicy, QMessageBox, QDialog, QComboBox, QStackedWidget, QListWidget, QListWidgetItem, QSlider, QFileDialog, QScrollArea
 )
 from PySide6.QtCore import Qt, Signal, QUrl, QTimer, QThread
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QPaintEvent, QPixmap, QImage
@@ -1905,6 +1905,16 @@ class CenterArea(QWidget):
         
         # Connect PLR test screen back button
         self.plr_test_screen.back_clicked.connect(self._on_recording_back_clicked)
+        
+        # PLR results → RightArea display
+        self.plr_test_screen.plr_results_ready.connect(self._on_plr_results)
+
+    def _on_plr_results(self, results: dict) -> None:
+        """Forward PLR results to RightArea for display."""
+        # Access RightArea through parent AppLayout
+        app_layout = self.parent()
+        if app_layout and hasattr(app_layout, 'right'):
+            app_layout.right.display_plr_results(results)
 
     def _on_patient_selected(self, patient_id: str) -> None:
         """
@@ -2200,13 +2210,125 @@ class RightArea(QWidget):
         self.setAttribute(Qt.WA_StyledBackground, True)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
-        label = QLabel("RIGHT AREA")
-        label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(label)
+        # Title
+        self.title_label = QLabel("PLR Results")
+        self.title_label.setAlignment(Qt.AlignCenter)
+        self.title_label.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #2E4A1A; padding: 5px;"
+        )
+        layout.addWidget(self.title_label)
+
+        # Scrollable results area
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        )
+
+        self.results_container = QWidget()
+        self.results_layout = QVBoxLayout(self.results_container)
+        self.results_layout.setContentsMargins(0, 0, 0, 0)
+        self.results_layout.setSpacing(4)
+
+        # Placeholder text
+        self.placeholder = QLabel("Run PLR Analysis\nto see results here.")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setStyleSheet("color: #5a7a3a; font-size: 11px; padding: 20px;")
+        self.results_layout.addWidget(self.placeholder)
+        self.results_layout.addStretch()
+
+        scroll.setWidget(self.results_container)
+        layout.addWidget(scroll, 1)
 
         self.setFixedWidth(260)
+
+    def display_plr_results(self, results: dict):
+        """Display PLR biomarker results from analysis."""
+        # Clear previous results
+        while self.results_layout.count():
+            item = self.results_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Check for error
+        if 'error' in results:
+            err_label = QLabel(f"\u26a0 {results['error']}")
+            err_label.setWordWrap(True)
+            err_label.setStyleSheet("color: #8B0000; font-size: 11px; padding: 5px;")
+            self.results_layout.addWidget(err_label)
+            self.results_layout.addStretch()
+            return
+
+        def fmt_vel(v):
+            if v is None or (isinstance(v, float) and (abs(v) == float('inf') or v != v)):
+                return "N/A"
+            return f"{v:.2f} px/s"
+
+        def fmt_prt(v):
+            if v is None:
+                return "N/A"
+            return f"{v * 1000:.1f} ms"
+
+        sections = [
+            ("Baseline", [
+                ("Mean \u00d8", f"{results['baseline_mean']:.1f} px"),
+                ("Max \u00d8", f"{results['baseline_max']:.1f} px"),
+                ("Min \u00d8", f"{results['baseline_min']:.1f} px"),
+            ]),
+            ("Latency", [
+                ("Latency", f"{results['latency'] * 1000:.1f} ms"),
+                ("Frame", f"{results['latency_frame_idx']}"),
+            ]),
+            ("Constriction", [
+                ("Peak Vel", fmt_vel(results['peak_constriction_velocity'])),
+                ("Avg Vel", fmt_vel(results['average_constriction_velocity'])),
+                ("Frame", f"{results['peak_constriction_velocity_frame']}"),
+            ]),
+            ("Minimum", [
+                ("Min \u00d8", f"{results['minimum_diameter']:.1f} px"),
+                ("Amplitude", f"{results['amplitude']:.1f} px"),
+                ("Frame", f"{results['minimum_diameter_frame']}"),
+            ]),
+            ("Dilation", [
+                ("Peak Vel", fmt_vel(results['peak_dilation_velocity'])),
+                ("Avg Vel", fmt_vel(results['average_dilation_velocity'])),
+                ("Frame", f"{results['peak_dilation_velocity_frame']}"),
+            ]),
+            ("Recovery (PRT)", [
+                ("PRT 50%", fmt_prt(results['prt_50'])),
+                ("PRT 63%", fmt_prt(results['prt_63'])),
+                ("PRT 75%", fmt_prt(results['prt_75'])),
+            ]),
+        ]
+
+        for section_title, items in sections:
+            # Section header
+            header = QLabel(section_title)
+            header.setStyleSheet(
+                "font-weight: bold; font-size: 11px; color: #2E4A1A;"
+                "padding: 4px 2px 2px 2px; border-bottom: 1px solid #8aad5a;"
+            )
+            self.results_layout.addWidget(header)
+
+            for label_text, value_text in items:
+                row = QHBoxLayout()
+                row.setContentsMargins(4, 1, 4, 1)
+                lbl = QLabel(label_text)
+                lbl.setStyleSheet("color: #3a5a2a; font-size: 10px;")
+                val = QLabel(value_text)
+                val.setStyleSheet("color: #1a3a0a; font-size: 10px; font-weight: bold;")
+                val.setAlignment(Qt.AlignRight)
+                row.addWidget(lbl)
+                row.addWidget(val)
+                row_widget = QWidget()
+                row_widget.setLayout(row)
+                self.results_layout.addWidget(row_widget)
+
+        self.results_layout.addStretch()
 
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)

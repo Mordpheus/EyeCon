@@ -7,13 +7,19 @@ import cv2
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
-    QPushButton, QLabel, QScrollArea, QDialog, QFileDialog,
-    QProgressBar, QSpinBox, QDoubleSpinBox, QComboBox
+    QPushButton, QLabel, QScrollArea, QDialog,
+    QProgressBar
 )
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt, QThread, Signal
 from typing import List, Dict, Optional
 import logging
+
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from scipy.signal import savgol_filter
+
+from src.pupil_analyzer import MM_PER_PIXEL
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +49,7 @@ class PupilFrameWidget(QWidget):
         # Info label
         info_text = f"Frame {frame_number}"
         if pupil_diameter:
-            info_text += f"\nØ {pupil_diameter:.1f}px"
+            info_text += f"\nØ {pupil_diameter * MM_PER_PIXEL:.2f}mm"
         if confidence > 0:
             info_text += f"\nConf: {confidence:.2f}"
         
@@ -109,7 +115,7 @@ class DetailViewDialog(QDialog):
         # Header
         num_eyes = len(all_eyes) if all_eyes else (1 if position else 0)
         header = QLabel(f"Frame {frame_number} | Eyes detected: {num_eyes} | "
-                       f"Primary Ø: {pupil_diameter:.2f}px | Confidence: {confidence:.2f}")
+                       f"Primary Ø: {pupil_diameter * MM_PER_PIXEL:.2f}mm | Confidence: {confidence:.2f}")
         header.setStyleSheet("font-weight: bold; font-size: 12px; padding: 10px;")
         layout.addWidget(header)
         
@@ -126,10 +132,10 @@ class DetailViewDialog(QDialog):
                 ex, ey = eye.get('position', (0, 0))
                 ed = eye.get('diameter_px', 0)
                 ec = eye.get('confidence', 0)
-                info_text += f"        Eye {side}: ({ex:.0f}, {ey:.0f}) Ø {ed:.1f}px  Conf: {ec:.2f}\n"
+                info_text += f"        Eye {side}: ({ex:.0f}, {ey:.0f}) Ø {ed * MM_PER_PIXEL:.2f}mm  Conf: {ec:.2f}\n"
         else:
             info_text += f"        Position: {position if position else 'N/A'}\n"
-            info_text += f"        Pupil Diameter: {pupil_diameter:.2f} pixels\n"
+            info_text += f"        Pupil Diameter: {pupil_diameter * MM_PER_PIXEL:.2f} mm\n"
         
         info_label = QLabel(info_text)
         info_label.setStyleSheet("background-color: #f5f5f5; padding: 10px; border-radius: 5px;")
@@ -185,7 +191,7 @@ class DetailViewDialog(QDialog):
 
             # Text label with eye side and diameter
             side = labels[idx] if idx < len(labels) else str(idx)
-            label = f"{side} Ø{diam:.0f}px"
+            label = f"{side} Ø{diam * MM_PER_PIXEL:.1f}mm"
             cv2.putText(display_image, label,
                        (center_x - 40, center_y - radius - 10),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
@@ -212,6 +218,7 @@ class PLRTestScreen(QWidget):
         self.init_ui()
         
         self.current_video_path = None
+        self.current_baseline_path = None
         self.current_frames = []
         self.current_analysis = None
     
@@ -220,35 +227,18 @@ class PLRTestScreen(QWidget):
         layout = QVBoxLayout()
         
         # Header
-        title = QLabel("PLR (Pupil Light Reflex) Test Analysis")
-        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px;")
+        title = QLabel("PLR (Pupil Light Reflex) Analysis")
+        title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px; color: #000000;")
         layout.addWidget(title)
         
-        # Control panel
+        # Control panel (back button only)
         control_layout = QHBoxLayout()
-        
-        self.load_btn = QPushButton("Load Video")
-        self.load_btn.clicked.connect(self.load_video)
-        control_layout.addWidget(self.load_btn)
-        
-        control_layout.addWidget(QLabel("Key Frame Count:"))
-        self.frame_count_spin = QSpinBox()
-        self.frame_count_spin.setMinimum(3)
-        self.frame_count_spin.setMaximum(12)
-        self.frame_count_spin.setValue(9)
-        control_layout.addWidget(self.frame_count_spin)
-        
-        self.analyze_btn = QPushButton("Analyze & Preview")
-        self.analyze_btn.setEnabled(False)
-        self.analyze_btn.clicked.connect(self.run_analysis)
-        control_layout.addWidget(self.analyze_btn)
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         control_layout.addWidget(self.progress_bar)
         
-        # Add spacer and back button
-        control_layout.addSpacing(20)
+        control_layout.addStretch()
         self.back_btn = QPushButton("Back")
         self.back_btn.clicked.connect(self.back_clicked.emit)
         control_layout.addWidget(self.back_btn)
@@ -266,80 +256,83 @@ class PLRTestScreen(QWidget):
         scroll_area.setWidget(self.grid_widget)
         layout.addWidget(scroll_area)
         
+        # === COMPARISON PLOT (Recording vs Baseline) ===
+        self.comparison_figure = Figure(figsize=(6.5, 2.4), dpi=80)
+        self.comparison_figure.patch.set_facecolor("#f5f5f5")
+        self.comparison_canvas = FigureCanvas(self.comparison_figure)
+        self.comparison_canvas.setStyleSheet("background-color: #f5f5f5; border-radius: 8px;")
+        self.comparison_canvas.setFixedHeight(200)
+        self.comparison_canvas.setMaximumWidth(620)
+        self.comparison_canvas.setVisible(False)
+        layout.addWidget(self.comparison_canvas, 0, Qt.AlignLeft)
+        
         # Status bar
-        self.status_label = QLabel("Ready. Load a video to start.")
-        self.status_label.setStyleSheet("padding: 10px; background-color: #e3f2fd; border-radius: 3px;")
+        self.status_label = QLabel("Aufnahme aus der Videoliste im linken Bereich ausw\u00e4hlen um Analyse zu starten.")
+        self.status_label.setStyleSheet("padding: 10px; background-color: #e3f2fd; border-radius: 3px; color: #000000;")
         layout.addWidget(self.status_label)
         
         self.setLayout(layout)
     
-    def load_video(self):
-        """Open file dialog to load video file."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Load Video File", "",
-            "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
-        )
+    def load_video(self, file_path: str, baseline_path: str = None):
+        """Load and analyze a video file with optional baseline comparison."""
+        if not file_path:
+            return
         
-        if file_path:
-            self.current_video_path = file_path
-            self.analyze_btn.setEnabled(True)
-            self.status_label.setText(f"Loaded: {file_path.split('/')[-1]}")
+        self.current_video_path = file_path
+        self.current_baseline_path = baseline_path
+        self.run_analysis()
     
     def run_analysis(self):
         """Run pupil analysis on video using improved detection."""
         if not self.current_video_path:
-            self.status_label.setText("❌ No video loaded")
+            self.status_label.setText("Kein Video geladen")
             return
         
         from src.pupil_analyzer import PupilAnalyzer
         
         try:
-            self.status_label.setText("🔄 Analyzing video frames...")
+            self.status_label.setText("Analysiere Video-Frames...")
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
             
             # Use Haar Cascade + Hough Circle Detection pipeline
             analyzer = PupilAnalyzer()
             
-            # Extract frames from video (process all frames)
+            # Extract ALL frames from video for full analysis (frame_pool=1)
             cap = cv2.VideoCapture(self.current_video_path)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
             
-            # Determine how many frames to display (every nth frame for performance)
-            num_display_frames = self.frame_count_spin.value()
-            frame_pool = max(1, total_frames // num_display_frames)
-            
-            # Analyze all frames but only display key frames
             analyzer.extract_frames_from_video(
                 self.current_video_path,
-                frame_pool=frame_pool,
+                frame_pool=1,
                 max_frames=None
             )
             
-            # Build display data from analyzed frames
+            # Pick 9 evenly spaced frames for grid display
+            valid_frames = [pf for pf in analyzer.pupil_frames
+                           if not np.isnan(pf.diameter_px) and not np.isnan(pf.position_x)]
+            num_display = min(9, len(valid_frames))
+            if num_display > 0:
+                step = max(1, len(valid_frames) // num_display)
+                display_indices = list(range(0, len(valid_frames), step))[:num_display]
+                display_pupil_frames = [valid_frames[i] for i in display_indices]
+            else:
+                display_pupil_frames = []
+            
+            # Build display data for the 9 grid thumbnails
             key_frames_data = []
             frame_count = 0
             cap = cv2.VideoCapture(self.current_video_path)
             
-            for pupil_frame in analyzer.pupil_frames:
-                # Set frame position and read
+            for pupil_frame in display_pupil_frames:
                 cap.set(cv2.CAP_PROP_POS_FRAMES, pupil_frame.frame_number)
                 ret, frame = cap.read()
                 
                 if ret:
-                    # Check for valid detection BEFORE converting to int
                     diameter = pupil_frame.diameter_px
                     confidence = pupil_frame.confidence
-                    position_x = pupil_frame.position_x
-                    position_y = pupil_frame.position_y
-                    
-                    # Skip frames with NaN values (undetected pupils)
-                    if np.isnan(diameter) or np.isnan(position_x) or np.isnan(position_y):
-                        logger.warning(f"Skipping frame {pupil_frame.frame_number}: No pupil detected (NaN values)")
-                        continue
-                    
-                    # Now safe to convert to int
-                    position = (int(position_x), int(position_y))
+                    position = (int(pupil_frame.position_x), int(pupil_frame.position_y))
 
                     # Build all_eyes list from analyzer.all_detections
                     all_eyes = []
@@ -362,7 +355,7 @@ class PLRTestScreen(QWidget):
                     })
                 
                 # Progress bar
-                progress = int((frame_count / len(analyzer.pupil_frames)) * 100)
+                progress = int((frame_count / max(1, len(display_pupil_frames))) * 100)
                 self.progress_bar.setValue(progress)
                 frame_count += 1
             
@@ -373,14 +366,19 @@ class PLRTestScreen(QWidget):
             self.current_frames = key_frames_data
             self.display_frame_grid()
             
-            # === PLR BIOMARKER CALCULATION ===
-            self.status_label.setText("🔄 Calculating PLR biomarkers...")
+            # === PLR BIOMARKER CALCULATION (using ALL analyzed frames) ===
+            self.status_label.setText("Berechne PLR Biomarker...")
             self.progress_bar.setValue(90)
+            
+            # Diameter data from ALL frames for plot and metrics
+            rec_times = np.array([pf.timestamp for pf in analyzer.pupil_frames])
+            rec_diameters = np.array([pf.diameter_px for pf in analyzer.pupil_frames]) * MM_PER_PIXEL
             
             try:
                 # Recording protocol: 0-1s IR baseline, 1-2s LED flash, 2-8s recovery
-                light_start_frame = int(1.0 * fps / frame_pool)
-                light_end_frame = int(2.0 * fps / frame_pool)
+                # frame_pool=1, so use fps directly
+                light_start_frame = int(1.0 * fps)
+                light_end_frame = int(2.0 * fps)
                 
                 # Clamp to valid range
                 n_frames = len(analyzer.pupil_frames)
@@ -399,7 +397,27 @@ class PLRTestScreen(QWidget):
                 logger.warning(f"PLR metrics calculation failed: {e}")
                 self.plr_results_ready.emit({'error': f'PLR calculation error: {str(e)}'})
             
-            self.status_label.setText(f"✅ Analysis complete - {len(key_frames_data)} frames analyzed")
+            # === BASELINE COMPARISON PLOT (also analyze all frames) ===
+            baseline_times = None
+            baseline_diameters = None
+            if self.current_baseline_path and self.current_baseline_path != self.current_video_path:
+                try:
+                    self.status_label.setText("Analysiere Baseline fuer Vergleich...")
+                    baseline_analyzer = PupilAnalyzer()
+                    baseline_analyzer.extract_frames_from_video(
+                        self.current_baseline_path,
+                        frame_pool=1,
+                        max_frames=None
+                    )
+                    if baseline_analyzer.pupil_frames:
+                        baseline_times = np.array([pf.timestamp for pf in baseline_analyzer.pupil_frames])
+                        baseline_diameters = np.array([pf.diameter_px for pf in baseline_analyzer.pupil_frames]) * MM_PER_PIXEL
+                except Exception as e:
+                    logger.warning(f"Baseline analysis for comparison failed: {e}")
+            
+            self._draw_comparison_plot(rec_times, rec_diameters, baseline_times, baseline_diameters)
+            
+            self.status_label.setText("Analyse abgeschlossen")
             self.progress_bar.setVisible(False)
             logger.info(f"Analyzed {len(analyzer.pupil_frames)} frames, displayed {len(key_frames_data)}")
             
@@ -407,7 +425,7 @@ class PLRTestScreen(QWidget):
             logger.error(f"Analysis error: {e}")
             import traceback
             traceback.print_exc()
-            self.status_label.setText(f"❌ Error: {str(e)}")
+            self.status_label.setText(f"Fehler: {str(e)}")
             self.progress_bar.setVisible(False)
     
     def display_frame_grid(self):
@@ -454,6 +472,93 @@ class PLRTestScreen(QWidget):
             )
             dialog.exec()
     
+    def _draw_comparison_plot(self, rec_times, rec_diameters,
+                              baseline_times=None, baseline_diameters=None):
+        """Draw comparison plot: recording vs baseline pupil diameter over time."""
+        self.comparison_figure.clear()
+        self.comparison_figure.patch.set_facecolor("#f5f5f5")
+        ax = self.comparison_figure.add_subplot(111)
+        ax.set_facecolor("#ffffff")
+        ax.tick_params(colors="#333", labelsize=7)
+        ax.grid(True, axis="both", linestyle="--", linewidth=0.4, color="#ddd", alpha=0.7)
+        for spine in ax.spines.values():
+            spine.set_color("#ccc")
+
+        # Light impulse shaded area (1-2s)
+        ax.axvspan(1.0, 2.0, alpha=0.18, color="#ffaa00", zorder=0)
+        ax.axvline(x=1.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.axvline(x=2.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+
+        has_data = False
+
+        # Plot baseline (gray) if available
+        if baseline_times is not None and baseline_diameters is not None and len(baseline_times) > 0:
+            # Interpolate NaN values
+            nan_mask = np.isnan(baseline_diameters)
+            valid = ~nan_mask
+            if np.sum(valid) >= 2:
+                bl_d = baseline_diameters.copy()
+                bl_d[nan_mask] = np.interp(
+                    np.where(nan_mask)[0], np.where(valid)[0], bl_d[valid]
+                )
+            else:
+                bl_d = baseline_diameters
+
+            # Smooth baseline
+            if len(bl_d) >= 7:
+                bl_smooth = savgol_filter(bl_d, window_length=7, polyorder=2)
+            else:
+                bl_smooth = bl_d
+
+            ax.plot(baseline_times, bl_smooth, color="#888888", linewidth=1.5,
+                    label="Baseline", alpha=0.7, zorder=2)
+            has_data = True
+
+        # Plot current recording (orange)
+        if rec_times is not None and rec_diameters is not None and len(rec_times) > 0:
+            # Interpolate NaN values
+            nan_mask = np.isnan(rec_diameters)
+            valid = ~nan_mask
+            if np.sum(valid) >= 2:
+                rec_d = rec_diameters.copy()
+                rec_d[nan_mask] = np.interp(
+                    np.where(nan_mask)[0], np.where(valid)[0], rec_d[valid]
+                )
+            else:
+                rec_d = rec_diameters
+
+            # Smooth recording
+            if len(rec_d) >= 7:
+                rec_smooth = savgol_filter(rec_d, window_length=7, polyorder=2)
+            else:
+                rec_smooth = rec_d
+
+            ax.plot(rec_times, rec_smooth, color="#e65100", linewidth=2.0,
+                    label="Aufnahme", zorder=3)
+            has_data = True
+
+        if has_data:
+            ax.set_xlabel("Time (s)", color="#e65100", fontsize=9, fontweight="bold")
+            ax.set_ylabel("Pupil Diameter (mm)", color="#e65100", fontsize=9,
+                          fontweight="bold", rotation=90)
+            ax.set_title("Aufnahme vs. Baseline", color="#333", fontsize=11, fontweight="bold")
+
+            # "Lichtimpuls" label
+            y_lim = ax.get_ylim()
+            y_top = y_lim[1] - (y_lim[1] - y_lim[0]) * 0.05
+            ax.text(1.5, y_top, "Lichtimpuls", ha="center", va="top",
+                    fontsize=7, fontweight="bold", color="#333",
+                    bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffaa00",
+                              edgecolor="none", alpha=0.85))
+
+            ax.legend(loc="upper right", fontsize=8, framealpha=0.8)
+            self.comparison_figure.subplots_adjust(left=0.10, right=0.97, top=0.82, bottom=0.16)
+            self.comparison_canvas.setVisible(True)
+        else:
+            self.comparison_canvas.setVisible(False)
+
+        self.comparison_canvas.draw()
+
     def _emit_results(self, metrics):
         """Package PLR metrics as dict and emit signal for RightArea display."""
         results = {

@@ -45,6 +45,11 @@ _IR_REFLEX_BRIGHTNESS_PERCENTILE = 99.5
 _EYE_Y_MIN_RATIO = 0.25
 _EYE_Y_MAX_RATIO = 0.67
 
+# Pixel-to-millimeter calibration factor for the IR camera at 640x480.
+# Derived from typical Pi NoIR close-up eye distance.
+# Adjust if camera setup changes.
+MM_PER_PIXEL = 0.1
+
 
 @dataclass
 class PupilFrame:
@@ -72,19 +77,19 @@ class PLRMetrics:
     latency_frame_idx: int
     
     # Constriction phase (pupil closing)
-    peak_constriction_velocity: float  # mm/s or px/frame
+    peak_constriction_velocity: float  # mm/s
     peak_constriction_velocity_frame: int
-    average_constriction_velocity: float
+    average_constriction_velocity: float  # mm/s
     
-    # Minimum diameter
+    # Minimum diameter (mm)
     minimum_diameter: float
     minimum_diameter_frame: int
-    amplitude: float  # baseline - minimum
+    amplitude: float  # baseline_mean - minimum_diameter (mm)
     
     # Dilation phase (pupil reopening)
-    peak_dilation_velocity: float
+    peak_dilation_velocity: float  # mm/s
     peak_dilation_velocity_frame: int
-    average_dilation_velocity: float
+    average_dilation_velocity: float  # mm/s
     
     # Pupil Recovery Time (PRT)
     prt_50: Optional[float] = None  # seconds to 50% recovery
@@ -625,8 +630,8 @@ class PupilAnalyzer:
         if not self.pupil_frames:
             raise ValueError("No pupil frames detected. Run extract_frames_from_video() first.")
         
-        # Extract diameter and timestamp arrays
-        diameters = np.array([f.diameter_px for f in self.pupil_frames])
+        # Extract diameter array and convert from pixels to millimeters
+        diameters = np.array([f.diameter_px for f in self.pupil_frames]) * MM_PER_PIXEL
         timestamps = np.array([f.timestamp for f in self.pupil_frames])
         
         # Interpolate NaN values (missed detections) for smooth analysis
@@ -699,8 +704,8 @@ class PupilAnalyzer:
         
         logger.info(f"Minimum diameter: {min_diameter:.2f} (frame {min_diameter_frame})")
         logger.info(f"Amplitude: {amplitude:.2f}")
-        logger.info(f"Peak constriction velocity: {peak_constr_vel:.4f} px/s")
-        logger.info(f"Peak dilation velocity: {peak_dilat_vel:.4f} px/s")
+        logger.info(f"Peak constriction velocity: {peak_constr_vel:.4f} mm/s")
+        logger.info(f"Peak dilation velocity: {peak_dilat_vel:.4f} mm/s")
         
         # === AVERAGE VELOCITIES ===
         avg_constr_velocity = (

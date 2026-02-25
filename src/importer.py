@@ -102,17 +102,18 @@ class TBIHeadsetImporter:
         """
         Copy video files from TBI export to project recordings folder with patient-based organization.
         
+        Keeps original TBI filenames (e.g. 2025-08-27-12-00-18.mp4) to ensure
+        stable recording IDs across repeated imports. Skips files that already exist.
+        
         Workflow:
-        1. Find patient_database.db and read recording→patient mappings
+        1. Find patient_database.db and read recording->patient mappings
         2. For each video in recordings/ folder:
            - Find patient_id from recording table
-           - Extract video timestamp from metada or creation time
-           - Rename to {timestamp}_scan_X.mp4 format
-           - Copy to data/recordings/{patient_id}/
-        3. Detect collisions: same timestamp → overwrite (same video re-imported)
+           - Copy to data/recordings/{patient_id}/ keeping original filename
+           - Skip if file already exists (re-import protection)
         
         Returns:
-            Tuple (mapping: dict of recording_id→(patient_id, local_path), errors: list)
+            Tuple (mapping: dict of tbi_filename->(patient_id, local_path), errors: list)
         """
         mapping = {}
         errors = []
@@ -150,20 +151,22 @@ class TBIHeadsetImporter:
                 
                 for tbi_rec in tbi_recordings:
                     rec_dict = dict(tbi_rec)
-                    video_id = rec_dict.get('id')  # Usually filename like "scan_001.mp4"
+                    video_id = rec_dict.get('id')  # Android file path (e.g. file:///data/.../video.mp4)
                     patient_id = rec_dict.get('patientId')
                     baseline = rec_dict.get('baseline', 0)
                     
                     if video_id and patient_id:
-                        video_patient_map[video_id] = (str(patient_id), int(baseline))
+                        # Extract filename from Android path for matching with local files
+                        filename = str(video_id).split("/")[-1]
+                        video_patient_map[filename] = (str(patient_id), int(baseline))
                 
             except Exception as e:
                 errors.append(f"Error reading TBI recording table: {str(e)}")
             finally:
                 tbi_conn.close()
             
-            # Step 2: Copy videos with timestamp-based naming to patient folders
-            scan_counters = {}  # Track scan numbers per patient
+            # Step 2: Copy videos to patient folders, keeping original TBI filenames
+            # Using the original filename ensures stable recording IDs across re-imports
             
             for video_file in tbi_recordings_dir.rglob("*"):
                 if video_file.is_file() and video_file.suffix.lower() in [".mp4", ".avi", ".mov", ".mkv"]:
@@ -174,39 +177,25 @@ class TBIHeadsetImporter:
                         patient_id, is_baseline = video_patient_map.get(video_filename, (None, 0))
                         
                         if not patient_id:
-                            errors.append(f"Video {video_filename} not found in TBI recording table, skipping")
+                            # Video file has no entry in TBI recording table — skip silently
                             continue
                         
                         # Create patient-specific directory
                         patient_recordings_dir = recordings_dir / str(patient_id)
                         patient_recordings_dir.mkdir(parents=True, exist_ok=True)
                         
-                        # Extract timestamp from file creation time (Unix timestamp)
-                        # Use current time if metadata not available
-                        unix_timestamp = int(video_file.stat().st_mtime)
+                        # Keep original TBI filename (e.g. 2025-08-27-12-00-18.mp4)
+                        local_path = patient_recordings_dir / video_filename
                         
-                        # Generate new filename with timestamp
-                        if is_baseline:
-                            # Baseline: {timestamp}_baseline.mp4
-                            new_filename = f"{unix_timestamp}_baseline.mp4"
+                        # Skip copy if file already exists (re-import protection)
+                        if local_path.exists():
+                            logger.info(f"Already exists, skipping: {local_path}")
                         else:
-                            # Normal scan: {timestamp}_scan_{counter}.mp4
-                            if patient_id not in scan_counters:
-                                scan_counters[patient_id] = 1
-                            else:
-                                scan_counters[patient_id] += 1
-                            
-                            new_filename = f"{unix_timestamp}_scan_{scan_counters[patient_id]}.mp4"
+                            shutil.copy2(video_file, local_path)
+                            logger.info(f"Copied {video_filename} -> {patient_id}/{video_filename}")
                         
-                        local_path = patient_recordings_dir / new_filename
-                        
-                        # Copy file (overwrites if same timestamp)
-                        shutil.copy2(video_file, local_path)
-                        
-                        # Store mapping: original_id → (patient_id, local_path)
+                        # Store mapping: original_filename -> (patient_id, local_path)
                         mapping[str(video_filename)] = (str(patient_id), str(local_path))
-                        
-                        logger.info(f"Copied {video_filename} → {patient_id}/{new_filename}")
                         
                     except Exception as e:
                         errors.append(f"Failed to copy {video_file.name}: {str(e)}")
@@ -231,18 +220,21 @@ class TBIHeadsetImporter:
             tbi_patient: Patient record from TBI import
             
         Returns:
-            'merge': Use existing patient, add recordings from TBI
-            'create_new': Create new patient with our standard ID format + TBI data
-            'skip': Don't import this patient
+            'merge': Use existing patient, import new recordings only
+            'skip': Skip this patient, continue with import
+            'cancel': Cancel entire import process
         """
         try:
             dialog = DuplicatePatientDialog(existing_patient, tbi_patient, parent=self.parent_widget)
-            dialog.exec()
+            result = dialog.exec()
             decision = dialog.get_decision()
-            return decision if decision else 'skip'
+            # If dialog was rejected (X button or Abbrechen), treat as cancel
+            if not result and decision != 'skip':
+                return 'cancel'
+            return decision if decision else 'cancel'
         except Exception as e:
             print(f"Error in duplicate patient dialog: {e}")
-            return 'skip'
+            return 'cancel'
 
     def import_from_zip(self, zip_path: str, parent=None) -> Tuple[bool, Dict[str, Any]]:
         """
@@ -250,11 +242,13 @@ class TBIHeadsetImporter:
         
         Workflow:
         1. Extract ZIP to temporary directory
-        2. Copy videos from recordings/ to data/recordings/
+        2. Copy videos from recordings/ to data/recordings/ (using TBI patient names)
         3. Find patient_database.db in extraction
         4. Import data to EyeCon database (with callback for duplicate handling)
-        5. Clean up temporary files
-        6. Show result dialog
+        5. Move video files from TBI-named folders to EyeCon UUID-named folders
+        6. If cancelled: clean up copied files and show cancellation dialog
+        7. Clean up temporary files
+        8. Show result dialog
         
         Args:
             zip_path: Path to ZIP file
@@ -281,7 +275,7 @@ class TBIHeadsetImporter:
                 result['errors'].append("Failed to extract ZIP file")
                 return False, result
             
-            # Step 2: Copy videos to project
+            # Step 2: Copy videos to project (organized by TBI patient names)
             video_mapping, copy_errors = self.copy_recordings_to_project(temp_dir)
             result['errors'].extend(copy_errors)
             
@@ -298,10 +292,26 @@ class TBIHeadsetImporter:
                 video_mapping,
                 on_duplicate_callback=self.handle_duplicate_patient
             )
+            
             result['imported_patients'] = import_result['imported_patients']
             result['imported_recordings'] = import_result['imported_recordings']
             result['duplicate_handled'] = import_result.get('duplicate_handled', 0)
             result['errors'].extend(import_result['errors'])
+            
+            # Step 5: Handle cancellation
+            if import_result.get('cancelled'):
+                self._cleanup_copied_files(video_mapping)
+                QMessageBox.information(
+                    parent, 
+                    "Import abgebrochen", 
+                    "Der Import wurde abgebrochen.\n"
+                    "Es wurden keine Daten importiert."
+                )
+                return False, result
+            
+            # Step 6: Move videos from TBI-named folders to EyeCon UUID-named folders
+            id_mapping = import_result.get('id_mapping', {})
+            self._relocate_patient_folders(id_mapping)
             
             return True, result
             
@@ -310,8 +320,86 @@ class TBIHeadsetImporter:
             return False, result
             
         finally:
-            # Step 5: Clean up temporary files
+            # Step 7: Clean up temporary files
             self.cleanup()
+
+    def _relocate_patient_folders(self, id_mapping: dict) -> None:
+        """
+        Move recording files from TBI-named folders to EyeCon UUID-named folders.
+        Also updates recording.id in the database to reflect the new paths.
+        
+        When TBI patient ID (a name like "Marcel Schepelmann") differs from the
+        generated EyeCon patient ID (UUID format), move all files from the old
+        folder to the new one.
+        
+        Args:
+            id_mapping: Dict mapping TBI patient IDs to EyeCon patient IDs
+        """
+        recordings_dir = Path("data/recordings")
+        
+        for tbi_id, eyecon_id in id_mapping.items():
+            if str(tbi_id) == str(eyecon_id):
+                continue  # Same ID, no move needed
+            
+            old_folder = recordings_dir / str(tbi_id)
+            new_folder = recordings_dir / str(eyecon_id)
+            
+            if not old_folder.exists():
+                continue
+            
+            try:
+                new_folder.mkdir(parents=True, exist_ok=True)
+                
+                # Move all files and update recording IDs in database
+                for file_path in old_folder.iterdir():
+                    old_path = str(file_path)
+                    target = new_folder / file_path.name
+                    new_path = str(target)
+                    
+                    shutil.move(str(file_path), str(target))
+                    
+                    # Update recording.id in database to use new path
+                    try:
+                        self.db_manager.conn.execute(
+                            "UPDATE recording SET id = ? WHERE id = ?",
+                            (new_path, old_path)
+                        )
+                        self.db_manager.conn.commit()
+                    except Exception:
+                        pass
+                
+                # Remove empty old folder
+                if not any(old_folder.iterdir()):
+                    old_folder.rmdir()
+                    
+            except Exception as e:
+                print(f"Warning: Could not move recordings from {old_folder} to {new_folder}: {e}")
+
+    def _cleanup_copied_files(self, video_mapping: dict) -> None:
+        """
+        Remove video files that were copied during a cancelled import.
+        
+        Args:
+            video_mapping: Dict mapping filenames to (patient_id, local_path) tuples
+        """
+        cleaned_folders = set()
+        
+        for tbi_filename, (tbi_patient_id, local_path) in video_mapping.items():
+            try:
+                file_path = Path(local_path)
+                if file_path.exists():
+                    file_path.unlink()
+                cleaned_folders.add(file_path.parent)
+            except Exception:
+                pass
+        
+        # Remove empty patient folders
+        for folder in cleaned_folders:
+            try:
+                if folder.exists() and not any(folder.iterdir()):
+                    folder.rmdir()
+            except Exception:
+                pass
 
     def cleanup(self):
         """Remove temporary extraction directory."""

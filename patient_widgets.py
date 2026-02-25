@@ -660,7 +660,7 @@ class DuplicatePatientDialog(QDialog):
         layout = QVBoxLayout()
 
         # Warning message
-        warning_label = QLabel("⚠️  Same patient found in both EyeCon and TBI import!")
+        warning_label = QLabel("Same patient found in both EyeCon and TBI import!")
         warning_font = QFont()
         warning_font.setPointSize(11)
         warning_font.setBold(True)
@@ -689,12 +689,12 @@ class DuplicatePatientDialog(QDialog):
         # Action buttons
         button_layout = QHBoxLayout()
 
-        merge_btn = QPushButton("✓ Merge (use TBI data)")
+        merge_btn = QPushButton("Merge (use TBI data)")
         merge_btn.setToolTip("Replace EyeCon data with TBI data")
         merge_btn.clicked.connect(self._on_merge_clicked)
         button_layout.addWidget(merge_btn)
 
-        skip_btn = QPushButton("→ Skip (keep EyeCon)")
+        skip_btn = QPushButton("Skip (keep EyeCon)")
         skip_btn.setToolTip("Keep existing EyeCon data, discard TBI data")
         skip_btn.clicked.connect(self._on_skip_clicked)
         button_layout.addWidget(skip_btn)

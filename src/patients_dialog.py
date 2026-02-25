@@ -89,15 +89,15 @@ class DuplicatePatientDialog(QDialog):
     Dialog for handling duplicate patient detection during TBI import.
     
     Presents existing patient and TBI import data side-by-side with three options:
-    - Merge: Use existing patient, add recordings from TBI
-    - Create New: Create new patient with TBI data + our standard ID format
-    - Skip: Don't import this patient
+    - Merge: Use existing patient, import only new recordings
+    - Skip: Skip this patient, continue with remaining import
+    - Cancel: Cancel the entire import process
     """
     
     # Dialog result codes
     MERGE = 1
-    CREATE_NEW = 2
-    SKIP = 3
+    SKIP = 2
+    CANCEL = 3
     
     def __init__(self, existing_patient: dict, tbi_patient: dict, parent=None):
         super().__init__(parent)
@@ -106,7 +106,7 @@ class DuplicatePatientDialog(QDialog):
         self.decision = None
         
         self.setWindowTitle("Duplikat erkannt - Import-Entscheidung")
-        self.resize(700, 400)
+        self.resize(700, 450)
         
         self._setup_ui()
     
@@ -115,7 +115,7 @@ class DuplicatePatientDialog(QDialog):
         main_layout = QVBoxLayout(self)
         
         # Header label
-        header = QLabel("Ein Patient mit dieser ID ist schon vorhanden:")
+        header = QLabel("Ein Patient mit diesem Namen ist schon vorhanden:")
         main_layout.addWidget(header)
         
         # Comparison grid: existing vs TBI data
@@ -133,36 +133,45 @@ class DuplicatePatientDialog(QDialog):
         grid.addWidget(QLabel(f"<b>ID:</b> {tbi_id}"), 1, 1)
         
         existing_name = f"{self.existing_patient.get('first_name', '')} {self.existing_patient.get('last_name', '')}".strip()
-        tbi_name = f"{self.tbi_patient.get('firstName') or self.tbi_patient.get('first_name', '')} {self.tbi_patient.get('lastName') or self.tbi_patient.get('last_name', '')}".strip()
+        # TBI uses patient ID as the name
+        tbi_name = str(tbi_id)
         
         grid.addWidget(QLabel(f"Name: {existing_name}"), 2, 0)
         grid.addWidget(QLabel(f"Name: {tbi_name}"), 2, 1)
         
         existing_birth = self.existing_patient.get('birthdate', 'N/A')
-        tbi_birth = self.tbi_patient.get('birthdate', 'N/A')
+        tbi_birth = self.tbi_patient.get('birthdate') or 'N/A'
         
         grid.addWidget(QLabel(f"Geburtsdatum: {existing_birth}"), 3, 0)
         grid.addWidget(QLabel(f"Geburtsdatum: {tbi_birth}"), 3, 1)
         
         existing_sex = self.existing_patient.get('sex', 'N/A')
-        tbi_sex = self.tbi_patient.get('sex', 'N/A')
+        tbi_sex = self.tbi_patient.get('sex') or 'N/A'
         
         grid.addWidget(QLabel(f"Geschlecht: {existing_sex}"), 4, 0)
         grid.addWidget(QLabel(f"Geschlecht: {tbi_sex}"), 4, 1)
         
         main_layout.addLayout(grid)
         
-        # Separator and explanation
+        # Separator and option descriptions (each on its own line)
         main_layout.addSpacing(20)
-        main_layout.addWidget(QLabel("Möglichkeiten:"))
+        main_layout.addWidget(QLabel("<b>Optionen:</b>"))
         
-        explanation = QLabel(
-            "• <b>Ja, Merge:</b> Verwende bestehenden Patienten, füge Aufnahmen hinzu\n"
-            "• <b>Nein, Neu:</b> Erstelle neuen Patienten mit unser ID-Format\n"
-            "• <b>Skip:</b> Importiere diesen Patienten nicht"
+        merge_desc = QLabel(
+            "  <b>Ja, Merge:</b> Bestehenden Patienten verwenden, "
+            "nur neue Aufnahmen importieren"
         )
-        explanation.setWordWrap(True)
-        main_layout.addWidget(explanation)
+        skip_desc = QLabel(
+            "  <b>Nein:</b> Diesen Patienten \u00fcberspringen, "
+            "mit Import fortfahren"
+        )
+        cancel_desc = QLabel(
+            "  <b>Abbrechen:</b> Gesamten Import abbrechen"
+        )
+        
+        main_layout.addWidget(merge_desc)
+        main_layout.addWidget(skip_desc)
+        main_layout.addWidget(cancel_desc)
         
         main_layout.addSpacing(10)
         
@@ -173,13 +182,13 @@ class DuplicatePatientDialog(QDialog):
         merge_btn.clicked.connect(self._on_merge)
         btn_layout.addWidget(merge_btn)
         
-        create_new_btn = QPushButton("Nein, Neu")
-        create_new_btn.clicked.connect(self._on_create_new)
-        btn_layout.addWidget(create_new_btn)
-        
-        skip_btn = QPushButton("Skip")
+        skip_btn = QPushButton("Nein")
         skip_btn.clicked.connect(self._on_skip)
         btn_layout.addWidget(skip_btn)
+        
+        cancel_btn = QPushButton("Abbrechen")
+        cancel_btn.clicked.connect(self._on_cancel)
+        btn_layout.addWidget(cancel_btn)
         
         main_layout.addStretch()
         main_layout.addLayout(btn_layout)
@@ -189,23 +198,23 @@ class DuplicatePatientDialog(QDialog):
         self.decision = 'merge'
         self.accept()
     
-    def _on_create_new(self) -> None:
-        """User chose to create new patient with TBI data."""
-        self.decision = 'create_new'
-        self.accept()
-    
     def _on_skip(self) -> None:
-        """User chose to skip importing this patient."""
+        """User chose to skip this patient and continue import."""
         self.decision = 'skip'
         self.accept()
+    
+    def _on_cancel(self) -> None:
+        """User chose to cancel the entire import."""
+        self.decision = 'cancel'
+        self.reject()
     
     def get_decision(self) -> str:
         """
         Returns the user's decision after dialog execution.
         
         Returns:
-            'merge': Use existing patient
-            'create_new': Create new patient with TBI data + our standard ID
-            'skip': Don't import this patient
+            'merge': Use existing patient, import new recordings only
+            'skip': Skip this patient, continue with import
+            'cancel': Cancel entire import process
         """
-        return self.decision if self.decision else 'skip'
+        return self.decision if self.decision else 'cancel'

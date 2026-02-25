@@ -585,17 +585,10 @@ class CameraController:
                 
                 recordings_dir.mkdir(parents=True, exist_ok=True)
                 
-                # Erzeuge Timestamp (Unix-Timestamp für eindeutige Identifikation)
-                unix_timestamp = int(time.time())
-                
-                # Generiere Filename basierend auf Typ
-                if is_baseline:
-                    # Baseline: timestamp_baseline.mp4
-                    filename = f"{unix_timestamp}_baseline.mp4"
-                else:
-                    # Normal: timestamp_scan_X.mp4
-                    self.scan_counter += 1
-                    filename = f"{unix_timestamp}_scan_{self.scan_counter}.mp4"
+                # Generate filename in YYYY-MM-DD-HH-MM-SS format (same as TBI schema)
+                from datetime import datetime as dt
+                timestamp_str = dt.now().strftime("%Y-%m-%d-%H-%M-%S")
+                filename = f"{timestamp_str}.mp4"
                 
                 output_file = str(recordings_dir / filename)
                 logger.info(f"Auto-generated filename: {filename} (is_baseline={is_baseline}, patient_id={patient_id})")
@@ -898,15 +891,15 @@ if __name__ == "__main__":
     if cameras:
         print("\n5. Verbinde zur Kamera...")
         if controller.connect_camera(0):
-            print("   ✅ Verbunden!")
+            print("   Verbunden!")
             
             # Frame-Test
             print("   Hole Frame...")
             frame = controller.get_frame()
             if frame:
-                print(f"   ✅ Frame erhalten!")
+                print(f"   Frame erhalten!")
             else:
-                print("   ❌ Kein Frame")
+                print("   Kein Frame")
             
             # Recording testen
             print("\n6. Recording Test...")
@@ -914,12 +907,12 @@ if __name__ == "__main__":
                 print("   Recording gestartet...")
                 time.sleep(2)
                 controller.stop_recording()
-                print("   ✅ Recording gestoppt")
+                print("   Recording gestoppt")
             
             # Cleanup
             print("\n7. Cleanup...")
             controller.disconnect()
-            print("   ✅ Getrennt")
+            print("   Getrennt")
     else:
         print("\n5. Keine Kameras verfügbar - überspringe Kamera-Test")
         controller.disconnect()

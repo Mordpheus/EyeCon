@@ -16,6 +16,7 @@ from data_manager import PatientDataManager
 from src.importer import TBIHeadsetImporter
 from src.camera_controller import CameraController
 from src.plr_test_screen import PLRTestScreen
+from src.pupil_analyzer import PupilAnalyzer
 
 
 # -------------------------------------------------
@@ -51,6 +52,38 @@ class RecordingWorker(QThread):
             self.recording_finished.emit(f"success:{result}")
         else:
             self.recording_finished.emit("error")
+
+
+# -------------------------------------------------
+# VIDEO ANALYSIS WORKER THREAD
+# -------------------------------------------------
+class AnalysisWorker(QThread):
+    """Background worker for pupil analysis of a recording."""
+    analysis_done = Signal(list, float)  # (pupil_frames, fps)
+    analysis_error = Signal(str)
+
+    def __init__(self, video_path: str):
+        super().__init__()
+        self.video_path = video_path
+
+    def run(self):
+        try:
+            import cv2
+            cap = cv2.VideoCapture(self.video_path)
+            if not cap.isOpened():
+                self.analysis_error.emit("Could not open video")
+                return
+            fps = cap.get(cv2.CAP_PROP_FPS) or 20
+            cap.release()
+
+            analyzer = PupilAnalyzer()
+            success = analyzer.extract_frames_from_video(self.video_path)
+            if success and analyzer.pupil_frames:
+                self.analysis_done.emit(analyzer.pupil_frames, fps)
+            else:
+                self.analysis_error.emit("No pupils detected")
+        except Exception as e:
+            self.analysis_error.emit(str(e))
 
 
 # -------------------------------------------------
@@ -363,6 +396,7 @@ class RecordingPlayerScreen(QWidget):
     """Screen to display and play a recording video."""
     
     back_clicked = Signal()  # Signal emitted when back button clicked
+    plr_analysis_clicked = Signal()  # Signal to open PLR analysis screen
     recordings_updated = Signal(list)  # Signal emitted when recordings list should refresh
     
     def __init__(self, camera_controller: CameraController = None):
@@ -377,6 +411,18 @@ class RecordingPlayerScreen(QWidget):
         # Patient info (set when navigating to recording screen)
         self.current_patient_id = None
         self.current_patient_display = "No patient selected"
+        
+        # Pupil analysis data for live plot
+        self._plot_times: list = []       # timestamps in seconds
+        self._plot_diameters: list = []   # raw pupil diameters in px
+        self._plot_diameters_smooth: list = []  # smoothed pupil diameters
+        self._plot_fps: float = 20.0
+        self._analysis_worker: Optional[AnalysisWorker] = None
+        self._plot_line = None            # matplotlib Line2D (smoothed)
+        self._plot_line_raw = None        # matplotlib Line2D (raw)
+        self._plot_dot = None             # laser-pointer scatter
+        self._plot_glow = None            # outer glow scatter
+        self._plot_ax = None              # cached axes
         
         # Manager reference (set by parent CenterArea)
         self.manager = None
@@ -481,11 +527,11 @@ class RecordingPlayerScreen(QWidget):
         # === Playback Controls ===
         controls_layout = QHBoxLayout()
         
-        self.play_btn = QPushButton("▶ Abspielen")
+        self.play_btn = QPushButton("Abspielen")
         self.play_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
-        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn = QPushButton("Pause")
         self.pause_btn.setStyleSheet("background-color: #ffaa44; color: white; font-weight: bold;")
-        self.stop_btn = QPushButton("⏹ Stopp")
+        self.stop_btn = QPushButton("Stopp")
         self.stop_btn.setStyleSheet("background-color: #aa4444; color: white; font-weight: bold;")
         
         self.play_btn.clicked.connect(self.media_player.play)
@@ -499,86 +545,59 @@ class RecordingPlayerScreen(QWidget):
         # === Aufnahmekontrolle ===
         controls_layout.addSpacing(20)
         
-        # === Normal Recording Button ===
-        self.start_normal_recording_btn = QPushButton("🔴 Normal Recording")
-        self.start_normal_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
-        self.start_normal_recording_btn.clicked.connect(lambda: self._on_start_recording(is_baseline=False))
-        controls_layout.addWidget(self.start_normal_recording_btn)
+        # === Recording Button ===
+        self.start_recording_btn = QPushButton("Recording starten")
+        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
+        self.start_recording_btn.clicked.connect(lambda: self._on_start_recording())
+        controls_layout.addWidget(self.start_recording_btn)
         
-        # === Baseline Recording Button ===
-        self.start_baseline_recording_btn = QPushButton("🔵 Baseline Recording")
-        self.start_baseline_recording_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
-        self.start_baseline_recording_btn.clicked.connect(lambda: self._on_start_recording(is_baseline=True))
-        controls_layout.addWidget(self.start_baseline_recording_btn)
-        
-        self.stop_recording_btn = QPushButton("⏹ REC STOPP")
+        self.stop_recording_btn = QPushButton("REC STOPP")
         self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
         self.stop_recording_btn.setEnabled(False)
         self.stop_recording_btn.clicked.connect(self._on_stop_recording)
         controls_layout.addWidget(self.stop_recording_btn)
         
+        controls_layout.addSpacing(20)
+        
+        # === Change Baseline Button ===
+        self.change_baseline_btn = QPushButton("🔵 Neue Baseline")
+        self.change_baseline_btn.setStyleSheet(
+            "background-color: #3355aa; color: white; font-weight: bold;"
+        )
+        self.change_baseline_btn.clicked.connect(self._on_change_baseline)
+        controls_layout.addWidget(self.change_baseline_btn)
+        
+        controls_layout.addSpacing(20)
+        
+        # === PLR Analysis Button ===
+        self.plr_analysis_btn = QPushButton("PLR Analysis")
+        self.plr_analysis_btn.setStyleSheet(
+            "background-color: #2E7D32; color: white; font-weight: bold;"
+        )
+        self.plr_analysis_btn.clicked.connect(self.plr_analysis_clicked.emit)
+        controls_layout.addWidget(self.plr_analysis_btn)
+        
         controls_layout.addStretch()
         
         layout.addLayout(controls_layout)
         
-        # === THREE PLOT AREA (Eye Tracking Visualization) ===
-        plots_container = QWidget()
-        plots_layout = QHBoxLayout(plots_container)
-        plots_layout.setContentsMargins(0, 0, 0, 0)
-        plots_layout.setSpacing(10)
-        
-        # Left: Baseline Graph
-        self.baseline_plot_widget = QWidget()
-        baseline_plot_layout = QVBoxLayout(self.baseline_plot_widget)
-        baseline_plot_layout.setContentsMargins(0, 0, 0, 0)
-        baseline_label = QLabel("Baseline Recording")
-        baseline_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
-        baseline_plot_layout.addWidget(baseline_label)
-        self.baseline_figure = Figure(figsize=(3, 2), dpi=80)
-        self.baseline_canvas = FigureCanvas(self.baseline_figure)
-        self.baseline_canvas.setStyleSheet("background-color: #1a1a1a;")
-        baseline_plot_layout.addWidget(self.baseline_canvas)
-        plots_layout.addWidget(self.baseline_plot_widget, 1)
-        
-        # Middle: Current Recording Graph (synchronized with video)
-        self.current_plot_widget = QWidget()
-        current_plot_layout = QVBoxLayout(self.current_plot_widget)
-        current_plot_layout.setContentsMargins(0, 0, 0, 0)
-        current_label = QLabel("Current Recording (Live)")
-        current_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
-        current_plot_layout.addWidget(current_label)
-        self.current_figure = Figure(figsize=(3, 2), dpi=80)
+        # === PLOT AREA (Pupil Diameter over Time) ===
+        self.current_figure = Figure(figsize=(6.5, 2.4), dpi=80)
+        self.current_figure.patch.set_facecolor("#f5f5f5")
         self.current_canvas = FigureCanvas(self.current_figure)
-        self.current_canvas.setStyleSheet("background-color: #1a1a1a;")
-        current_plot_layout.addWidget(self.current_canvas)
-        plots_layout.addWidget(self.current_plot_widget, 1)
+        self.current_canvas.setStyleSheet("background-color: #f5f5f5; border-radius: 8px;")
+        self.current_canvas.setFixedHeight(200)
+        self.current_canvas.setMaximumWidth(520)
+        layout.addWidget(self.current_canvas, 0, Qt.AlignLeft)
         
-        # Right: Recording Selection (placeholder)
-        self.recording_select_widget = QWidget()
-        recording_select_layout = QVBoxLayout(self.recording_select_widget)
-        recording_select_layout.setContentsMargins(0, 0, 0, 0)
-        select_label = QLabel("Recordings & Baselines")
-        select_label.setStyleSheet("color: white; font-weight: bold; font-size: 11px;")
-        recording_select_layout.addWidget(select_label)
+        # Hidden recording list (internal data management only)
         self.recording_list = QListWidget()
-        self.recording_list.setStyleSheet("""
-            QListWidget {
-                background-color: #2a2a2a;
-                color: white;
-                border: 1px solid #555;
-            }
-        """)
-        # Connect list selection to playback (use itemClicked not currentItemChanged)
+        self.recording_list.setVisible(False)
         try:
             self.recording_list.itemClicked.connect(self._on_recording_selected)
             print(f"[RecordingPlayerScreen] itemClicked signal connected successfully")
         except Exception as e:
             print(f"[RecordingPlayerScreen] ERROR connecting itemClicked: {e}")
-        recording_select_layout.addWidget(self.recording_list)
-        plots_layout.addWidget(self.recording_select_widget, 1)
-        
-        layout.addWidget(plots_container, 0)
-        layout.setStretchFactor(plots_container, 0)
         
         # === Recording Details ===
         self.details_label = QLabel()
@@ -625,7 +644,7 @@ class RecordingPlayerScreen(QWidget):
         else:
             self.recording_info.setText(f"Recording: {display_name}")
         
-        baseline_text = "✓ Baseline Recording" if is_baseline else "Normal Recording"
+        baseline_text = "Baseline Recording" if is_baseline else "Normal Recording"
         if date_str:
             self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str}")
         else:
@@ -634,19 +653,19 @@ class RecordingPlayerScreen(QWidget):
         # Load video file
         # Note: Recording IDs are file paths from TBI_Headset database
         # Try to load the file if it exists
+        video_path = str(rec_id)
         try:
-            video_path = str(rec_id)
             if Path(video_path).exists():
                 media_url = QUrl.fromLocalFile(video_path)
                 self.media_player.setSource(media_url)
-                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n✓ Video loaded successfully")
+                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\nVideo loaded successfully")
             else:
-                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n⚠ Video file not found at: {video_path}")
+                self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\nVideo file not found at: {video_path}")
         except Exception as e:
-            self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\n⚠ Error loading video: {str(e)}")
+            self.details_label.setText(f"{baseline_text}\nFile: {display_name}\nDate: {date_str if date_str else 'Not recorded'}\nError loading video: {str(e)}")
         
-        # === Populate Plots ===
-        self._update_plots(recording)
+        # === Analyze video for live plot ===
+        self._start_analysis(video_path)
     
     def _on_recording_selected(self, item: QListWidgetItem) -> None:
         """Handle recording selection from list."""
@@ -718,7 +737,7 @@ class RecordingPlayerScreen(QWidget):
                     date_str = "(no date)"
                 
                 # Create item
-                baseline_label = "✓ [BASELINE]" if is_baseline else ""
+                baseline_label = "[BASELINE]" if is_baseline else ""
                 item_text = f"{display_name} - {date_str} {baseline_label}".strip()
                 item = QListWidgetItem(item_text)
                 
@@ -748,70 +767,181 @@ class RecordingPlayerScreen(QWidget):
             print(f"[RecordingPlayerScreen] Error refreshing recordings list: {e}")
             self.recording_info.setText(f"Error loading recordings: {str(e)}")
     
-    def _update_plots(self, recording: dict) -> None:
-        """Update the three plot areas with current and baseline data."""
-        
-        # Clear previous plots (but NOT the recording list!)
-        self.baseline_figure.clear()
-        self.current_figure.clear()
-        
-        # === Left Plot: Baseline Recording (if exists) ===
-        baseline_ax = self.baseline_figure.add_subplot(111)
-        baseline_ax.set_facecolor("#1a1a1a")
-        baseline_ax.tick_params(colors='white')
-        for spine in baseline_ax.spines.values():
-            spine.set_color("#555")
-        
-        if recording.get('baseline'):
-            # Plot baseline data (placeholder - would load actual eye-tracking data)
-            baseline_ax.plot([0, 1, 2, 3], [100, 120, 110, 115], color='blue', linewidth=1.5, label='Baseline')
-            baseline_ax.set_title("Baseline Data", color='white', fontsize=10)
-            baseline_ax.set_xlabel("Time (s)", color='white', fontsize=8)
-            baseline_ax.set_ylabel("Position (px)", color='white', fontsize=8)
-            baseline_ax.legend(facecolor='#2a2a2a', edgecolor='white', fontsize=8)
+    # ------------------------------------------------------------------
+    #  Video analysis + live plot infrastructure
+    # ------------------------------------------------------------------
+
+    def _start_analysis(self, video_path: str) -> None:
+        """Launch background pupil analysis for the loaded video."""
+        # Reset previous data
+        self._plot_times = []
+        self._plot_diameters = []
+        self._init_empty_plot("Analysiere Video...")
+
+        if not video_path or not Path(video_path).exists():
+            self._init_empty_plot("Kein Video vorhanden")
+            return
+
+        # Stop previous worker if still running
+        if self._analysis_worker and self._analysis_worker.isRunning():
+            self._analysis_worker.terminate()
+            self._analysis_worker.wait()
+
+        self._analysis_worker = AnalysisWorker(video_path)
+        self._analysis_worker.analysis_done.connect(self._on_analysis_done)
+        self._analysis_worker.analysis_error.connect(self._on_analysis_error)
+        self._analysis_worker.start()
+
+    def _on_analysis_done(self, pupil_frames, fps: float) -> None:
+        """Receive analysis results and prepare plot data."""
+        from scipy.signal import savgol_filter
+        self._plot_fps = fps
+        # Sort by timestamp
+        pupil_frames.sort(key=lambda pf: pf.timestamp)
+        from src.pupil_analyzer import MM_PER_PIXEL
+        self._plot_times = [pf.timestamp for pf in pupil_frames]
+        self._plot_diameters = [pf.diameter_px * MM_PER_PIXEL for pf in pupil_frames]
+
+        # Smooth the diameter signal (Savitzky-Golay)
+        raw = np.array(self._plot_diameters)
+        if len(raw) >= 7:
+            self._plot_diameters_smooth = savgol_filter(raw, window_length=7, polyorder=2).tolist()
         else:
-            baseline_ax.text(0.5, 0.5, 'No Baseline Available', ha='center', va='center',
-                           transform=baseline_ax.transAxes, color='#666', fontsize=10)
-            baseline_ax.set_xticks([])
-            baseline_ax.set_yticks([])
-        
-        self.baseline_figure.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.15)
-        self.baseline_canvas.draw()
-        
-        # === Middle Plot: Current Recording (synchronized with video) ===
-        current_ax = self.current_figure.add_subplot(111)
-        current_ax.set_facecolor("#1a1a1a")
-        current_ax.tick_params(colors='white')
-        for spine in current_ax.spines.values():
-            spine.set_color("#555")
-        
-        # Plot current recording data (placeholder - would update with video playback)
-        current_ax.plot([0, 1, 2, 3], [110, 115, 125, 120], color='green', linewidth=1.5, label='Current Recording')
-        current_ax.set_title(f"Current Recording", color='white', fontsize=10)
-        current_ax.set_xlabel("Time (s)", color='white', fontsize=8)
-        current_ax.set_ylabel("Position (px)", color='white', fontsize=8)
-        current_ax.legend(facecolor='#2a2a2a', edgecolor='white', fontsize=8)
-        
-        self.current_figure.subplots_adjust(left=0.1, right=0.95, top=0.9, bottom=0.15)
+            self._plot_diameters_smooth = self._plot_diameters[:]
+
+        print(f"[Plot] Analysis done: {len(self._plot_times)} frames, FPS={fps:.1f}")
+        self._init_live_plot()
+
+    def _on_analysis_error(self, msg: str) -> None:
+        """Handle failed analysis."""
+        print(f"[Plot] Analysis error: {msg}")
+        self._init_empty_plot(f"Analyse fehlgeschlagen: {msg}")
+
+    def _init_empty_plot(self, message: str = "") -> None:
+        """Show an empty plot with an optional centered message."""
+        self.current_figure.clear()
+        self.current_figure.patch.set_facecolor("#f5f5f5")
+        ax = self.current_figure.add_subplot(111)
+        ax.set_facecolor("#ffffff")
+        ax.tick_params(colors="#333", labelsize=7)
+        for spine in ax.spines.values():
+            spine.set_color("#ccc")
+        if message:
+            ax.text(0.5, 0.5, message, ha="center", va="center",
+                    transform=ax.transAxes, color="#999", fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        self.current_figure.subplots_adjust(left=0.10, right=0.97, top=0.88, bottom=0.16)
         self.current_canvas.draw()
-        
-        # === Right Widget: Recording Selection List ===
-        # Populate with all recordings for this patient (from parent CenterArea)
-        # For now, add placeholder entries
-        recordings = [
-            f"Recording {i+1} {'(Baseline)' if i == 0 else ''}"
-            for i in range(3)
-        ]
-        
-        for rec in recordings:
-            item = QListWidgetItem(rec)
-            item.setForeground(QColor('white'))
-            if '(Baseline)' in rec:
-                item.setBackground(QColor('#4a4a4a'))
-            self.recording_list.addItem(item)
+        self._plot_ax = None
+        self._plot_line = None
+        self._plot_dot = None
+        self._plot_glow = None
+
+    def _init_live_plot(self) -> None:
+        """Set up the axes and empty artists for the laser-pointer animation.
+
+        Axes: X = Time (s), Y = Pupil Diameter (px).
+        Styled to match the reference: light background, orange line, orange dot.
+        """
+        self.current_figure.clear()
+        self.current_figure.patch.set_facecolor("#f5f5f5")
+        ax = self.current_figure.add_subplot(111)
+        ax.set_facecolor("#ffffff")
+        ax.tick_params(colors="#333", labelsize=7)
+        ax.grid(True, axis="both", linestyle="--", linewidth=0.4, color="#ddd", alpha=0.7)
+        for spine in ax.spines.values():
+            spine.set_color("#ccc")
+
+        # Axis ranges from analysis data
+        t_max = max(self._plot_times) if self._plot_times else 8.0
+        d_min = min(self._plot_diameters) if self._plot_diameters else 0
+        d_max = max(self._plot_diameters) if self._plot_diameters else 100
+        d_margin = (d_max - d_min) * 0.12 or 5
+
+        # X = Time, Y = Diameter (standard PLR layout)
+        ax.set_xlim(0, t_max)
+        ax.set_ylim(d_min - d_margin, d_max + d_margin)
+        ax.set_xlabel("Time (s)", color="#e65100", fontsize=9, fontweight="bold")
+        ax.set_ylabel("Pupil Diameter (mm)", color="#e65100", fontsize=9,
+                      fontweight="bold", rotation=90)
+        ax.set_title("Pupil Diameter", color="#333", fontsize=11, fontweight="bold")
+
+        # Light impulse shaded area + label
+        ax.axvspan(1.0, 2.0, alpha=0.18, color="#ffaa00", zorder=0)
+        ax.axvline(x=1.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.axvline(x=2.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        # "Lichtimpuls" label above the shaded zone
+        y_top = d_max + d_margin * 0.3
+        ax.text(1.5, y_top, "Lichtimpuls", ha="center", va="bottom",
+                fontsize=7, fontweight="bold", color="#333",
+                bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffaa00",
+                          edgecolor="none", alpha=0.85))
+
+        # Pre-create artists (empty at first)
+        # Raw data as thin gray background line
+        self._plot_line_raw, = ax.plot([], [], color="#aaaaaa", linewidth=0.7,
+                                        alpha=0.5, zorder=1)
+        # Smoothed data as main orange line
+        self._plot_line, = ax.plot([], [], color="#e65100", linewidth=2.0,
+                                   solid_capstyle="round", zorder=3)
+        # Outer glow (orange)
+        self._plot_glow = ax.scatter([], [], s=250, color="#ff8a50", alpha=0.25, zorder=5)
+        # Inner laser dot (white center, orange border)
+        self._plot_dot = ax.scatter([], [], s=55, color="#ffffff", edgecolors="#e65100",
+                                    linewidths=2, zorder=6)
+        self._plot_ax = ax
+
+        self.current_figure.subplots_adjust(left=0.10, right=0.97, top=0.82, bottom=0.16)
+        self.current_canvas.draw()
+        # Cache the background for blitting
+        self._plot_bg = self.current_canvas.copy_from_bbox(ax.bbox)
+
+    def _update_live_plot(self, current_time_s: float) -> None:
+        """Redraw the plot up to *current_time_s* with laser-pointer dot."""
+        if not self._plot_times or self._plot_ax is None:
+            return
+
+        # Determine visible data slice
+        vis_t = []
+        vis_d_raw = []
+        vis_d_smooth = []
+        for i, t in enumerate(self._plot_times):
+            if t <= current_time_s:
+                vis_t.append(t)
+                vis_d_raw.append(self._plot_diameters[i])
+                vis_d_smooth.append(self._plot_diameters_smooth[i])
+            else:
+                break
+
+        if not vis_t:
+            return
+
+        # Update raw background line
+        self._plot_line_raw.set_data(vis_t, vis_d_raw)
+
+        # Update smoothed main line (X = time, Y = diameter)
+        self._plot_line.set_data(vis_t, vis_d_smooth)
+
+        # Update laser-pointer dot (last visible smoothed point)
+        tip_t, tip_d = vis_t[-1], vis_d_smooth[-1]
+        self._plot_dot.set_offsets([[tip_t, tip_d]])
+        self._plot_glow.set_offsets([[tip_t, tip_d]])
+
+        # Efficient redraw via blitting
+        try:
+            self.current_canvas.restore_region(self._plot_bg)
+            self._plot_ax.draw_artist(self._plot_line_raw)
+            self._plot_ax.draw_artist(self._plot_line)
+            self._plot_ax.draw_artist(self._plot_glow)
+            self._plot_ax.draw_artist(self._plot_dot)
+            self.current_canvas.blit(self._plot_ax.bbox)
+        except Exception:
+            # Fallback: full redraw
+            self.current_canvas.draw_idle()
     
     def on_position_changed(self, position_ms: int) -> None:
-        """Update timeline slider and time label when video position changes."""
+        """Update timeline slider, time label, and live plot when video position changes."""
         if self.media_player.duration() > 0:
             # Update slider (0-1000 scale)
             slider_value = int((position_ms / self.media_player.duration()) * 1000)
@@ -826,6 +956,10 @@ class RecordingPlayerScreen(QWidget):
             total_min, total_sec = divmod(total_secs, 60)
             
             self.time_label.setText(f"{current_min:02d}:{current_sec:02d} / {total_min:02d}:{total_sec:02d}")
+            
+            # Drive live laser-pointer plot
+            current_time_s = position_ms / 1000.0
+            self._update_live_plot(current_time_s)
     
     def on_duration_changed(self, duration_ms: int) -> None:
         """Update duration label when video duration is loaded."""
@@ -862,14 +996,14 @@ class RecordingPlayerScreen(QWidget):
         except Exception as e:
             print(f"[RecordingPlayerScreen._on_preview_timer] Error: {e}")
     
-    def _on_start_recording(self, is_baseline: bool = False):
-        """Start recording video from camera (Normal or Baseline). 
+    def _on_start_recording(self):
+        """Start recording video from camera.
         
-        Args:
-            is_baseline: True für Baseline-Aufnahme, False für normales Recording
+        Baseline status is determined after recording completes:
+        If this is the first recording for the patient, a dialog asks
+        whether to save as baseline. Otherwise saved as normal scan.
         """
-        recording_type = "Baseline" if is_baseline else "Normal"
-        print(f"[RecordingPlayerScreen._on_start_recording] Starting {recording_type} recording...")
+        print(f"[RecordingPlayerScreen._on_start_recording] Starting recording...")
         
         # Check if camera controller exists
         if not self.camera_controller:
@@ -889,13 +1023,11 @@ class RecordingPlayerScreen(QWidget):
             return
         
         try:
-            print(f"[RecordingPlayerScreen._on_start_recording] {recording_type} recording - initializing...")
-            # Deaktiviere Start-Buttons
+            print(f"[RecordingPlayerScreen._on_start_recording] Recording - initializing...")
+            # Deaktiviere Start-Button
             self.is_recording = True
-            self.start_normal_recording_btn.setEnabled(False)
-            self.start_normal_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
-            self.start_baseline_recording_btn.setEnabled(False)
-            self.start_baseline_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
+            self.start_recording_btn.setEnabled(False)
+            self.start_recording_btn.setStyleSheet("background-color: #888888; color: white; font-weight: bold;")
             self.stop_recording_btn.setEnabled(True)
             self.stop_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
             
@@ -909,10 +1041,10 @@ class RecordingPlayerScreen(QWidget):
             if hasattr(self, 'current_patient_id') and self.current_patient_id:
                 patient_id = self.current_patient_id
             
-            print(f"[RecordingPlayerScreen._on_start_recording] Creating RecordingWorker: is_baseline={is_baseline}, patient_id={patient_id}")
+            print(f"[RecordingPlayerScreen._on_start_recording] Creating RecordingWorker: patient_id={patient_id}")
             
-            # Start recording in separate thread with baseline flag and patient_id
-            self.recording_worker = RecordingWorker(self.camera_controller, is_baseline=is_baseline, patient_id=patient_id)
+            # Start recording in separate thread (baseline determined after completion)
+            self.recording_worker = RecordingWorker(self.camera_controller, is_baseline=False, patient_id=patient_id)
             self.recording_worker.recording_finished.connect(self._on_recording_finished)
             self.recording_worker.start()
             
@@ -924,10 +1056,7 @@ class RecordingPlayerScreen(QWidget):
             # Start timer to poll for new frames
             self.preview_timer.start(50)  # Poll every 50ms
             
-            if is_baseline:
-                self.recording_info.setText("🔵 BASELINE RECORDING: 8 Sekunden läuft... (LED-Stimulus 1.0-2.0s)")
-            else:
-                self.recording_info.setText("🔴 RECORDING: 8-Sekunden-Protokoll läuft... (LED-Stimulus 1.0-2.0s)")
+            self.recording_info.setText("RECORDING: 8-Sekunden-Protokoll laeuft... (LED-Stimulus 1.0-2.0s)")
             
         except Exception as e:
             import traceback
@@ -935,8 +1064,8 @@ class RecordingPlayerScreen(QWidget):
             traceback.print_exc()
             self.recording_info.setText(f"✗ Fehler beim Starten der Aufnahme: {str(e)}")
             self.is_recording = False
-            self.start_normal_recording_btn.setEnabled(True)
-            self.start_baseline_recording_btn.setEnabled(True)
+            self.start_recording_btn.setEnabled(True)
+            self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
             self.stop_recording_btn.setEnabled(False)
     
     def _on_stop_recording(self):
@@ -962,7 +1091,7 @@ class RecordingPlayerScreen(QWidget):
             frame_count = self.camera_controller.get_recorded_frame_count()
             
             self.recording_info.setText(
-                f"⏸ Recording gestoppt nach {elapsed:.1f}s ({frame_count} frames)"
+                f"Recording gestoppt nach {elapsed:.1f}s ({frame_count} frames)"
             )
             
             # Nur kurz aufgenommen (<8s) = Dialog anzeigen
@@ -994,8 +1123,8 @@ class RecordingPlayerScreen(QWidget):
         
         yes_btn = msg_box.button(QMessageBox.Yes)
         no_btn = msg_box.button(QMessageBox.No)
-        yes_btn.setText("💾 Speichern")
-        no_btn.setText("🗑️ Verwerfen")
+        yes_btn.setText("Speichern")
+        no_btn.setText("Verwerfen")
         
         result = msg_box.exec()
         
@@ -1005,7 +1134,7 @@ class RecordingPlayerScreen(QWidget):
         else:
             # Benutzer möchte löschen
             self.camera_controller.delete_temp_recording()
-            self.recording_info.setText("🗑️ Recording gelöscht")
+            self.recording_info.setText("Recording geloescht")
         
         # Reset Button-Zustände
         self.is_recording = False
@@ -1036,13 +1165,13 @@ class RecordingPlayerScreen(QWidget):
                 result = self.camera_controller.save_manual_recording(file_path)
                 
                 if result:
-                    self.recording_info.setText(f"✓ Recording gespeichert:\n{result}")
+                    self.recording_info.setText(f"Recording gespeichert:\n{result}")
                 else:
                     self.recording_info.setText("✗ Fehler beim Speichern der Datei!")
             else:
                 # Benutzer hat Abbrechen geklickt - Datei löschen
                 self.camera_controller.delete_temp_recording()
-                self.recording_info.setText("🗑️ Recording verworfen")
+                self.recording_info.setText("Recording verworfen")
         
         except Exception as e:
             self.recording_info.setText(f"✗ Fehler: {str(e)}")
@@ -1050,66 +1179,222 @@ class RecordingPlayerScreen(QWidget):
     def _complete_recording(self):
         """
         Called when recording completes (8 seconds).
-        Saves file and adds to database.
+        Checks if this is the first recording for the patient.
+        If yes, shows a dialog asking if it should be saved as baseline.
+        Otherwise saves as normal scan.
         """
         try:
-            # File should already be saved to disk
-            if self.camera_controller.recording_file:
-                file_path = self.camera_controller.recording_file
-                file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
-                
-                # Check if this is a baseline recording
-                is_baseline = getattr(self.camera_controller, 'recording_is_baseline', False)
-                baseline_value = 1 if is_baseline else 0
-                
-                # Add recording to database if manager is available
-                if self.manager and self.current_patient_id:
-                    from time import time
-                    # Store full file path as recording_id so we can find the file later
-                    recording_id = str(file_path)
-                    current_timestamp = int(time())
-                    
-                    self.manager.add_recording(
-                        recording_id=recording_id,
-                        patient_id=self.current_patient_id,
-                        date=current_timestamp,
-                        baseline=baseline_value  # 1 if baseline, 0 if normal
-                    )
-                    
-                    recording_type = "Baseline" if is_baseline else "Normal"
-                    print(f"[RecordingPlayerScreen] {recording_type} recording added to database: {recording_id}")
-                    
-                    # Emit signal if callback is set
-                    if self.on_recordings_updated:
-                        recordings = self.manager.get_recordings(self.current_patient_id)
-                        self.on_recordings_updated(recordings)
-                    
-                    self.recording_info.setText(
-                        f"[OK] {recording_type} recording gespeichert und in Datenbank eingetragen:\n"
-                        f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
-                    )
-                else:
-                    self.recording_info.setText(
-                        f"[OK] Recording gespeichert (Datenbank nicht verfügbar):\n"
-                        f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
-                    )
-                
-                # Clear the recording file for next recording attempt
-                self.camera_controller.recording_file = None
-            else:
+            if not self.camera_controller.recording_file:
                 self.recording_info.setText("[FAIL] Recording-Datei nicht gefunden!")
+                self._reset_recording_buttons()
+                return
+            
+            file_path = self.camera_controller.recording_file
+            file_size_mb = Path(file_path).stat().st_size / (1024 * 1024)
+            
+            if not (self.manager and self.current_patient_id):
+                self.recording_info.setText(
+                    f"[OK] Recording gespeichert (Datenbank nicht verfügbar):\n"
+                    f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
+                )
+                self.camera_controller.recording_file = None
+                self._reset_recording_buttons()
+                return
+            
+            # Check if patient already has recordings in database
+            existing_recordings = self.manager.get_recordings(self.current_patient_id)
+            is_first_recording = len(existing_recordings) == 0
+            
+            if is_first_recording:
+                # First recording for this patient: ask if baseline
+                baseline_value = self._show_baseline_dialog()
+            else:
+                # Not the first recording: save as normal scan
+                baseline_value = 0
+            
+            # Baseline status is stored in DB only, no file rename needed
+            
+            from time import time
+            recording_id = str(file_path)
+            current_timestamp = int(time())
+            
+            self.manager.add_recording(
+                recording_id=recording_id,
+                patient_id=self.current_patient_id,
+                date=current_timestamp,
+                baseline=baseline_value
+            )
+            
+            recording_type = "Baseline" if baseline_value == 1 else "Normal"
+            print(f"[RecordingPlayerScreen] {recording_type} recording added to database: {recording_id}")
+            
+            # Emit signal if callback is set
+            if self.on_recordings_updated:
+                recordings = self.manager.get_recordings(self.current_patient_id)
+                self.on_recordings_updated(recordings)
+            
+            self.recording_info.setText(
+                f"[OK] {recording_type} Recording gespeichert:\n"
+                f"{Path(file_path).name} ({file_size_mb:.2f}MB)"
+            )
+            
+            self.camera_controller.recording_file = None
+            
         except Exception as e:
             print(f"[RecordingPlayerScreen] Error in _complete_recording: {str(e)}")
             self.recording_info.setText(f"[FAIL] Fehler: {str(e)}")
         
-        # Reset button states
+        self._reset_recording_buttons()
+    
+    def _show_baseline_dialog(self) -> int:
+        """
+        Show dialog asking if the first recording should be saved as baseline.
+        
+        Returns:
+            1 if baseline, 0 if normal recording
+        """
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Erste Aufnahme")
+        msg_box.setIcon(QMessageBox.Question)
+        msg_box.setText(
+            "Dies ist die erste Aufnahme für diesen Patienten.\n\n"
+            "Soll diese Aufnahme als Baseline (gesunder Referenzwert) "
+            "gespeichert werden?"
+        )
+        
+        yes_btn = msg_box.addButton("Ja, als Baseline speichern", QMessageBox.YesRole)
+        no_btn = msg_box.addButton("Nein, als normale Aufnahme", QMessageBox.NoRole)
+        msg_box.setDefaultButton(yes_btn)
+        
+        msg_box.exec()
+        
+        if msg_box.clickedButton() == yes_btn:
+            print("[RecordingPlayerScreen] User chose: Baseline")
+            return 1
+        else:
+            print("[RecordingPlayerScreen] User chose: Normal recording")
+            return 0
+    
+    def _rename_recording_file(self, file_path: str, baseline_value: int) -> str:
+        """
+        Legacy method kept for compatibility. No longer renames files.
+        Baseline status is stored exclusively in the database.
+        
+        Args:
+            file_path: Current file path
+            baseline_value: 1 for baseline, 0 for normal
+        
+        Returns:
+            Unchanged file path
+        """
+        return file_path
+    
+    def _reset_recording_buttons(self):
+        """Reset recording button states after recording completes or fails."""
         self.is_recording = False
-        self.start_normal_recording_btn.setEnabled(True)
-        self.start_normal_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
-        self.start_baseline_recording_btn.setEnabled(True)
-        self.start_baseline_recording_btn.setStyleSheet("background-color: #4444ff; color: white; font-weight: bold;")
+        self.start_recording_btn.setEnabled(True)
+        self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
         self.stop_recording_btn.setEnabled(False)
         self.stop_recording_btn.setStyleSheet("background-color: #666666; color: white; font-weight: bold;")
+
+    def _on_change_baseline(self):
+        """
+        Show a dialog to select a new baseline recording from the patient's recordings.
+        After selection, ask for confirmation before applying the change.
+        """
+        if not self.manager or not self.current_patient_id:
+            QMessageBox.warning(self, "Fehler", "Kein Patient ausgewählt.")
+            return
+
+        recordings = self.manager.get_recordings(self.current_patient_id)
+        if not recordings:
+            QMessageBox.information(
+                self, "Keine Aufnahmen",
+                "Für diesen Patienten existieren noch keine Aufnahmen."
+            )
+            return
+
+        # --- Selection dialog ---
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Neue Baseline auswählen")
+        dialog.setMinimumWidth(450)
+        dlg_layout = QVBoxLayout(dialog)
+
+        info_label = QLabel(
+            "Wählen Sie die Aufnahme, die als neue Baseline\n"
+            "(gesunder Referenzwert) gesetzt werden soll:"
+        )
+        info_label.setStyleSheet("font-size: 12px; padding: 5px;")
+        dlg_layout.addWidget(info_label)
+
+        combo = QComboBox()
+        combo.setMinimumHeight(30)
+        for rec in recordings:
+            rec_path = rec.get("id", "")
+            rec_date = rec.get("date", 0)
+            is_baseline = rec.get("baseline", 0)
+
+            display_name = Path(rec_path).name if rec_path else "Unknown"
+
+            date_str = ""
+            if rec_date and rec_date > 0:
+                try:
+                    date_str = datetime.fromtimestamp(rec_date).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    date_str = ""
+
+            marker = "  [aktuelle Baseline]" if is_baseline else ""
+            combo.addItem(f"{display_name}  —  {date_str}{marker}", rec_path)
+
+        dlg_layout.addWidget(combo)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("Auswählen")
+        ok_btn.setStyleSheet("background-color: #3355aa; color: white; font-weight: bold;")
+        cancel_btn = QPushButton("Abbrechen")
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        dlg_layout.addLayout(btn_layout)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_path = combo.currentData()
+        selected_text = combo.currentText()
+        if not selected_path:
+            return
+
+        # --- Confirmation dialog ---
+        confirm = QMessageBox(self)
+        confirm.setWindowTitle("Baseline bestätigen")
+        confirm.setIcon(QMessageBox.Question)
+        confirm.setText(
+            f"Soll diese Aufnahme als neue Baseline gesetzt werden?\n\n"
+            f"{selected_text}"
+        )
+        yes_btn = confirm.addButton("Ja", QMessageBox.YesRole)
+        confirm.addButton("Nein", QMessageBox.NoRole)
+        confirm.setDefaultButton(yes_btn)
+        confirm.exec()
+
+        if confirm.clickedButton() != yes_btn:
+            self.recording_info.setText("Baseline-Auswahl abgebrochen.")
+            return
+
+        # --- Apply ---
+        success = self.manager.set_baseline_recording(
+            self.current_patient_id, selected_path
+        )
+
+        if success:
+            self.recording_info.setText(
+                f"Neue Baseline gesetzt: {Path(selected_path).name}"
+            )
+            self._refresh_recordings_list()
+        else:
+            self.recording_info.setText("✗ Fehler beim Setzen der neuen Baseline.")
     
     def _on_recording_finished(self, result: str):
         """
@@ -1136,8 +1421,8 @@ class RecordingPlayerScreen(QWidget):
             print(f"[RecordingPlayerScreen] ERROR in recording: {result}")
             self.recording_info.setText("✗ Fehler beim Recording!")
             self.is_recording = False
-            self.start_normal_recording_btn.setEnabled(True)
-            self.start_baseline_recording_btn.setEnabled(True)
+            self.start_recording_btn.setEnabled(True)
+            self.start_recording_btn.setStyleSheet("background-color: #ff4444; color: white; font-weight: bold;")
             self.stop_recording_btn.setEnabled(False)
     
     def on_timeline_moved(self, value: int) -> None:
@@ -1297,7 +1582,7 @@ class SettingsScreen(QWidget):
         port_row.addWidget(self.port_dropdown)
         
         # Scan Ports button
-        scan_btn = QPushButton("🔄 Scan Ports")
+        scan_btn = QPushButton("Scan Ports")
         scan_btn.setMaximumWidth(120)
         scan_btn.clicked.connect(self._on_scan_ports)
         port_row.addWidget(scan_btn)
@@ -1310,13 +1595,13 @@ class SettingsScreen(QWidget):
         led_label.setStyleSheet("color: black;")
         led_row.addWidget(led_label)
         
-        self.led_on_btn = QPushButton("💡 LED ON")
+        self.led_on_btn = QPushButton("LED ON")
         self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white; padding: 5px;")
         self.led_on_btn.setMaximumWidth(100)
         self.led_on_btn.clicked.connect(self._on_led_on)
         led_row.addWidget(self.led_on_btn)
         
-        self.led_off_btn = QPushButton("💡 LED OFF")
+        self.led_off_btn = QPushButton("LED OFF")
         self.led_off_btn.setStyleSheet("background-color: #444444; color: white; padding: 5px;")
         self.led_off_btn.setMaximumWidth(100)
         self.led_off_btn.clicked.connect(self._on_led_off)
@@ -1382,10 +1667,10 @@ class SettingsScreen(QWidget):
         status = self.camera_controller.get_status()
         
         text = "Status:\n"
-        text += f"  Serial: {'✓ Connected' if status['serial_connected'] else '❌ Disconnected'}\n"
+        text += f"  Serial: {'Connected' if status['serial_connected'] else 'Disconnected'}\n"
         text += f"  Port: {status['com_port']}\n"
         text += f"  Cameras: {status['cameras_available']} found\n"
-        text += f"  Recording: {'🔴 Active' if status['is_recording'] else '⏹ Stopped'}"
+        text += f"  Recording: {'Active' if status['is_recording'] else 'Stopped'}"
         
         self.status_text.setText(text)
     
@@ -1594,7 +1879,7 @@ class SettingsScreen(QWidget):
                             with open("debug_preview.log", "a") as f:
                                 f.write(f"ERROR: Failed to start timer: {e}\n")
                         
-                        self.status_text.setText(f"✓ Videosignal gefunden - Kamera verbunden")
+                        self.status_text.setText(f"Videosignal gefunden - Kamera verbunden")
                         print(f"[OK] Connected to camera via {port}")
                     else:
                         print(f"DEBUG: connect_camera(0) returned False")
@@ -1784,7 +2069,7 @@ class SettingsScreen(QWidget):
         """Turn LED on."""
         if self.camera_controller.led_on():
             self.led_on_btn.setStyleSheet("background-color: #ffdd44; color: black; font-weight: bold; padding: 5px;")
-            self.status_text.setText("✓ LED: ON (GPIO 18 activated)")
+            self.status_text.setText("LED: ON (GPIO 18 activated)")
             print("LED turned ON successfully")
         else:
             self.status_text.setText("✗ LED Error: Failed to turn LED on. Check serial connection.")
@@ -1795,7 +2080,7 @@ class SettingsScreen(QWidget):
         """Turn LED off."""
         if self.camera_controller.led_off():
             self.led_on_btn.setStyleSheet("background-color: #44aa44; color: white; padding: 5px;")
-            self.status_text.setText("✓ LED: OFF (GPIO 18 deactivated)")
+            self.status_text.setText("LED: OFF (GPIO 18 deactivated)")
             print("LED turned OFF successfully")
         else:
             self.status_text.setText("✗ LED Error: Failed to turn LED off. Check serial connection.")
@@ -1842,18 +2127,6 @@ class CenterArea(QWidget):
         button_row.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
 
         layout.addWidget(self.button_container)
-        
-        # --- Separate PLR button bar (always visible, not hidden) ---
-        plr_bar_container = QWidget()
-        plr_bar = QHBoxLayout(plr_bar_container)
-        plr_bar.setContentsMargins(0, 0, 0, 0)
-        
-        plr_bar.addSpacerItem(QSpacerItem(20, 10, QSizePolicy.Expanding, QSizePolicy.Minimum))
-        self.btn_plr_test = QPushButton("PLR Analysis")
-        self.btn_plr_test.setMaximumWidth(150)
-        plr_bar.addWidget(self.btn_plr_test)
-        
-        layout.addWidget(plr_bar_container)
 
         # === STACKED WIDGET: Switch between different screens ===
         self.stacked_widget = QStackedWidget()
@@ -1898,10 +2171,12 @@ class CenterArea(QWidget):
         self.btn_create.clicked.connect(self._on_create_clicked)
         self.btn_delete.clicked.connect(self._on_delete_clicked)
         self.btn_edit.clicked.connect(self._on_edit_clicked)
-        self.btn_plr_test.clicked.connect(self._on_plr_test_clicked)
         
         # Connect recording player back button
         self.recording_player.back_clicked.connect(self._on_recording_back_clicked)
+        
+        # Connect PLR analysis button in recording player
+        self.recording_player.plr_analysis_clicked.connect(self._on_plr_test_clicked)
         
         # Connect PLR test screen back button
         self.plr_test_screen.back_clicked.connect(self._on_recording_back_clicked)
@@ -2106,10 +2381,37 @@ Möchten Sie erneut versuchen?"""
     def _on_plr_test_clicked(self) -> None:
         """
         Handle PLR Test Analysis button click.
-        Opens the PLR test screen for pupil detection analysis.
+        Passes the current video and baseline path to the PLR test screen
+        and triggers automatic analysis.
         """
-        # Switch to PLR test screen (index 4)
+        # Get the current video path from the recording player
+        rec = self.recording_player.current_recording
+        if not rec:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.information(self, "Info", "Bitte zuerst eine Aufnahme auswählen.")
+            return
+        
+        video_path = str(rec.get('id', ''))
+        if not video_path or not Path(video_path).exists():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Fehler", "Videodatei nicht gefunden.")
+            return
+        
+        # Try to find the baseline recording for comparison
+        baseline_path = None
+        patient_id = self.recording_player.current_patient_id
+        if patient_id and self.manager:
+            recordings = self.manager.get_recordings(patient_id)
+            for r in recordings:
+                if r.get('baseline', 0) == 1:
+                    bl_path = str(r.get('id', ''))
+                    if bl_path and Path(bl_path).exists():
+                        baseline_path = bl_path
+                    break
+        
+        # Switch to PLR test screen and start analysis
         self.stacked_widget.setCurrentIndex(4)
+        self.plr_test_screen.load_video(video_path, baseline_path)
     
     def _on_recording_back_clicked(self) -> None:
         """
@@ -2266,7 +2568,7 @@ class RightArea(QWidget):
         def fmt_vel(v):
             if v is None or (isinstance(v, float) and (abs(v) == float('inf') or v != v)):
                 return "N/A"
-            return f"{v:.2f} px/s"
+            return f"{v:.2f} mm/s"
 
         def fmt_prt(v):
             if v is None:
@@ -2275,9 +2577,9 @@ class RightArea(QWidget):
 
         sections = [
             ("Baseline", [
-                ("Mean \u00d8", f"{results['baseline_mean']:.1f} px"),
-                ("Max \u00d8", f"{results['baseline_max']:.1f} px"),
-                ("Min \u00d8", f"{results['baseline_min']:.1f} px"),
+                ("Mean \u00d8", f"{results['baseline_mean']:.1f} mm"),
+                ("Max \u00d8", f"{results['baseline_max']:.1f} mm"),
+                ("Min \u00d8", f"{results['baseline_min']:.1f} mm"),
             ]),
             ("Latency", [
                 ("Latency", f"{results['latency'] * 1000:.1f} ms"),
@@ -2289,8 +2591,8 @@ class RightArea(QWidget):
                 ("Frame", f"{results['peak_constriction_velocity_frame']}"),
             ]),
             ("Minimum", [
-                ("Min \u00d8", f"{results['minimum_diameter']:.1f} px"),
-                ("Amplitude", f"{results['amplitude']:.1f} px"),
+                ("Min \u00d8", f"{results['minimum_diameter']:.1f} mm"),
+                ("Amplitude", f"{results['amplitude']:.1f} mm"),
                 ("Frame", f"{results['minimum_diameter_frame']}"),
             ]),
             ("Dilation", [
@@ -2435,8 +2737,8 @@ class AppLayout(QWidget):
         """
         Handle recording selection from dropdown in LeftArea.
         
-        When user selects a recording from the dropdown, display it in the
-        RecordingPlayerScreen and switch to that screen.
+        When on PLR analysis screen (index 4), trigger analysis directly.
+        Otherwise show recording in RecordingPlayerScreen.
         
         Args:
             index: Index of selected item in dropdown (0 = placeholder, 1+ = actual recordings)
@@ -2450,7 +2752,25 @@ class AppLayout(QWidget):
         if not recording_data:
             return
         
-        # Set the recording in the player and show it
+        # If currently on PLR analysis screen, analyze directly
+        if self.center.stacked_widget.currentIndex() == 4:
+            video_path = str(recording_data.get('id', ''))
+            if video_path and Path(video_path).exists():
+                # Find baseline for comparison
+                baseline_path = None
+                patient_id = self.center.recording_player.current_patient_id
+                if patient_id and self.center.manager:
+                    recordings = self.center.manager.get_recordings(patient_id)
+                    for r in recordings:
+                        if r.get('baseline', 0) == 1:
+                            bl_path = str(r.get('id', ''))
+                            if bl_path and Path(bl_path).exists():
+                                baseline_path = bl_path
+                            break
+                self.center.plr_test_screen.load_video(video_path, baseline_path)
+            return
+        
+        # Normal flow: show in recording player
         self.center.recording_player.set_recording(recording_data)
         self.center.stacked_widget.setCurrentIndex(1)  # Show recording player screen
     

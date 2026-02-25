@@ -220,21 +220,21 @@ class PatientDataManager:
                 cur.execute("DELETE FROM patient")
                 self.conn.commit()
             except Exception as e:
-                print(f"⚠️  Could not clear old test data: {e}")
+                print(f"Could not clear old test data: {e}")
 
     def create_patient(self, birthdate: str, sex: str, first_name: str = "", last_name: str = "", patient_id: str = None) -> str:
         """
         Create new patient record.
         
-        IMPORTANT: first_name and last_name are REQUIRED (not optional)
         Names are stored separately and not used in ID generation.
         Patient ID is either generated from birthdate + sex, or provided directly.
+        When patient_id is provided (TBI import), birthdate and sex may be empty.
         
         Args:
-            birthdate: Patient birthdate in format YYYY-MM-DD or DD.MM.YYYY
-            sex: Single character gender: M (male), W (female), D (diverse)
-            first_name: Patient first name (REQUIRED - must not be empty)
-            last_name: Patient last name (REQUIRED - must not be empty)
+            birthdate: Patient birthdate in format YYYY-MM-DD or DD.MM.YYYY (can be empty)
+            sex: Single character gender: M (male), W (female), D (diverse) (can be empty)
+            first_name: Patient first name
+            last_name: Patient last name
             patient_id: Optional. If provided, use this ID directly (for TBI imports).
                        If None, generate standard XXXX-YYYY-MM-DD-G format.
         
@@ -242,18 +242,17 @@ class PatientDataManager:
             Patient ID (either generated or provided as parameter)
             
         Raises:
-            ValueError: If first_name or last_name is empty
+            ValueError: If patient_id is None and first_name or last_name is empty
         """
-        # Validate that names are provided (not empty)
-        if not first_name or not first_name.strip():
-            raise ValueError("First name is required and cannot be empty")
-        if not last_name or not last_name.strip():
-            raise ValueError("Last name is required and cannot be empty")
-        
         # Generate or use provided patient ID
         if patient_id is None:
+            # For generated IDs, names and birthdate are required
+            if not first_name or not first_name.strip():
+                raise ValueError("First name is required and cannot be empty")
+            if not last_name or not last_name.strip():
+                raise ValueError("Last name is required and cannot be empty")
             patient_id = self.generate_patient_id(birthdate, sex)
-        # else: use TBI ID directly as-is (no format validation)
+        # else: use provided ID directly (TBI import — fields may be incomplete)
         
         # Normalize birthdate to YYYY-MM-DD format if needed
         if birthdate and '.' in birthdate:
@@ -266,7 +265,7 @@ class PatientDataManager:
         cur.execute(
             """INSERT INTO patient (id, first_name, last_name, sex, birthdate) 
                VALUES (?, ?, ?, ?, ?)""",
-            (patient_id, first_name.strip(), last_name.strip(), sex, birthdate)
+            (patient_id, (first_name or '').strip(), (last_name or '').strip(), sex or '', birthdate or '')
         )
         self.conn.commit()
         return patient_id
@@ -371,6 +370,25 @@ class PatientDataManager:
         """Check if patient with given ID exists."""
         return self.get_patient(patient_id) is not None
 
+    def find_patient_by_name(self, first_name: str, last_name: str) -> Dict[str, Any] | None:
+        """
+        Find an existing patient by first and last name (case-insensitive).
+        
+        Args:
+            first_name: Patient first name
+            last_name: Patient last name
+            
+        Returns:
+            Patient dict if found, None otherwise
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT * FROM patient WHERE LOWER(first_name) = LOWER(?) AND LOWER(last_name) = LOWER(?)",
+            (first_name.strip(), last_name.strip())
+        )
+        row = cur.fetchone()
+        return dict(row) if row else None
+
     def delete_patient(self, patient_id: str) -> None:
         """Delete patient and all associated recordings (CASCADE)."""
         cur = self.conn.cursor()
@@ -425,19 +443,27 @@ class PatientDataManager:
         patient_recordings_dir = Path("data/recordings") / str(patient_id)
         recordings = []
         
+        # Build a lookup of baseline flags from the database
+        baseline_lookup = {}
+        try:
+            cur = self.conn.cursor()
+            cur.execute("SELECT id, baseline FROM recording WHERE patientId = ?", (patient_id,))
+            for row in cur.fetchall():
+                baseline_lookup[row['id']] = row['baseline']
+        except Exception:
+            pass
+
         # Scan only this patient's recording folder
         if patient_recordings_dir.exists():
             for video_file in sorted(patient_recordings_dir.glob("*.mp4"), reverse=True):
-                # Create recording info from file
-                rec_id = video_file.stem  # Filename without .mp4
                 file_path = str(video_file)  # Full path to the file
                 file_mtime = int(video_file.stat().st_mtime)
                 
-                # Determine if baseline based on filename pattern
-                is_baseline = 1 if "baseline" in rec_id else 0
+                # Read baseline flag from database (not from filename)
+                is_baseline = baseline_lookup.get(file_path, 0)
                 
                 recording = {
-                    'id': file_path,  # CRITICAL: Use full file path, not just filename!
+                    'id': file_path,
                     'patientId': patient_id,
                     'date': file_mtime,
                     'baseline': is_baseline,
@@ -458,6 +484,44 @@ class PatientDataManager:
         row = cur.fetchone()
         return dict(row) if row else None
 
+    def set_baseline_recording(self, patient_id: str, new_baseline_path: str) -> bool:
+        """
+        Set a recording as the new baseline for a patient.
+
+        Only updates the baseline flag in the database.
+        Files are NOT renamed — baseline status is stored exclusively in the DB.
+
+        Args:
+            patient_id: Patient ID
+            new_baseline_path: Full file path of the recording to promote
+
+        Returns:
+            True on success, False on error
+        """
+        try:
+            cur = self.conn.cursor()
+
+            # Demote all current baselines for this patient
+            cur.execute(
+                "UPDATE recording SET baseline = 0 WHERE patientId = ? AND baseline = 1",
+                (patient_id,)
+            )
+
+            # Promote the selected recording
+            cur.execute(
+                "UPDATE recording SET baseline = 1 WHERE id = ? AND patientId = ?",
+                (new_baseline_path, patient_id)
+            )
+
+            self.conn.commit()
+            print(f"[DB] Baseline set: {new_baseline_path}")
+            return True
+
+        except Exception as e:
+            print(f"[DB] Error setting baseline: {e}")
+            self.conn.rollback()
+            return False
+
     def import_from_tbi_headset(
         self, 
         tbi_db_path: str, 
@@ -468,30 +532,25 @@ class PatientDataManager:
         Import patient data and recordings from TBI_Headset database.
         
         WORKFLOW:
-        1. Read all patients from TBI database
-        2. Use TBI patient ID directly (no format conversion)
-        3. Check for duplicates (patient with same TBI ID already exists):
-           - If found: Call on_duplicate_callback(existing_patient, tbi_patient)
-           - Callback returns: 'merge' (combine recordings), 'create_new' (new patient with our ID format),
-             or 'skip' (don't import)
-        4. Read all recordings and map to patients
-        5. Convert Android paths to local recording IDs (YYYY-MM-DD-HH-MM-SS format)
-        6. Insert all data into database
+        Phase 1: Read all TBI patients, parse names from TBI ID, check for
+                 duplicates by name. Collect user decisions (merge/skip/cancel)
+                 before writing anything to the database.
+        Phase 2: Create new patients and build id_mapping (TBI ID -> EyeCon ID).
+        Phase 3: Import recordings with timestamp-based duplicate detection.
+        
+        TBI uses the patient name as its ID field (e.g. "Marcel Schepelmann").
+        We parse this into first_name/last_name and generate our own UUID-based
+        patient ID (XXXX-YYYY-MM-DD-G format).
         
         Args:
             tbi_db_path: Path to TBI Patient database (SQLite)
-            video_mapping: Dict mapping Android filenames to local paths (optional)
+            video_mapping: Dict mapping video filenames to (patient_id, local_path)
             on_duplicate_callback: Function called on duplicate detection
-                                 Signature: on_duplicate_callback(existing_patient, tbi_patient) 
-                                 Returns: 'merge'|'create_new'|'skip'
+                                 Signature: callback(existing_patient, tbi_patient)
+                                 Returns: 'merge' | 'skip' | 'cancel'
         
         Returns:
-            Dict with import statistics:
-                - imported_patients: New patients created
-                - imported_recordings: Recordings added
-                - skipped_recordings: Recordings not imported
-                - duplicate_handled: Existing patients with merged recordings
-                - errors: List of error messages
+            Dict with import statistics and id_mapping for folder management
         """
         if video_mapping is None:
             video_mapping = {}
@@ -501,6 +560,8 @@ class PatientDataManager:
             'imported_recordings': 0,
             'skipped_recordings': 0,
             'duplicate_handled': 0,
+            'cancelled': False,
+            'id_mapping': {},
             'errors': []
         }
         
@@ -510,9 +571,9 @@ class PatientDataManager:
             tbi_conn.row_factory = sqlite3.Row
             tbi_cur = tbi_conn.cursor()
             
-            # === PHASE 1: IMPORT PATIENTS ===
-            # id_mapping: TBI patient_id → EyeCon patient_id (stored patient ID in our system)
-            id_mapping = {}
+            # === PHASE 1: COLLECT PATIENT DECISIONS (no DB writes) ===
+            # decisions: list of (tbi_id, decision, patient_dict, existing_patient)
+            decisions = []
             
             try:
                 tbi_cur.execute("SELECT * FROM Patient")
@@ -527,66 +588,96 @@ class PatientDataManager:
                             result['errors'].append("TBI patient has no ID, skipping")
                             continue
                         
-                        # Extract names and metadata from TBI patient
-                        first_name = patient_dict.get('firstName') or patient_dict.get('first_name') or 'Unknown'
-                        last_name = patient_dict.get('lastName') or patient_dict.get('last_name') or 'Unknown'
-                        birthdate = patient_dict.get('birthdate') or '1990-01-01'
-                        sex = patient_dict.get('sex') or 'D'
+                        # TBI uses patient name as ID — parse into first/last name
+                        name_parts = str(tbi_id).strip().split(' ', 1)
+                        first_name = name_parts[0]
+                        last_name = name_parts[1] if len(name_parts) > 1 else name_parts[0]
+                        
+                        # Store parsed names in dict for later use
+                        patient_dict['_parsed_first_name'] = first_name
+                        patient_dict['_parsed_last_name'] = last_name
+                        
+                        birthdate = patient_dict.get('birthdate') or ''
+                        sex = patient_dict.get('sex') or ''
                         
                         # Normalize sex to M/W/D
-                        sex_map = {'M': 'M', 'W': 'W', 'D': 'D', 'male': 'M', 'female': 'W', 'diverse': 'D'}
-                        sex = sex_map.get(str(sex).upper(), 'D')
+                        sex_map = {
+                            'M': 'M', 'W': 'W', 'D': 'D',
+                            'MALE': 'M', 'FEMALE': 'W', 'DIVERSE': 'D'
+                        }
+                        sex = sex_map.get(str(sex).upper(), '') if sex else ''
+                        patient_dict['_normalized_sex'] = sex
+                        patient_dict['_normalized_birthdate'] = birthdate
                         
-                        # Check if patient already exists with this TBI ID
+                        # Check for existing patient: first by TBI ID (same ID from
+                        # previous import), then by name match
+                        existing_patient = None
                         if self.patient_exists(tbi_id):
-                            # Patient with this TBI ID already exists in our system
                             existing_patient = self.get_patient(tbi_id)
-                            
+                        else:
+                            existing_patient = self.find_patient_by_name(first_name, last_name)
+                        
+                        if existing_patient:
+                            # Duplicate detected — ask user
                             if on_duplicate_callback:
                                 decision = on_duplicate_callback(existing_patient, patient_dict)
                             else:
-                                # Default: skip if no callback provided
                                 decision = 'skip'
                             
-                            if decision == 'merge':
-                                # Reuse existing patient ID - add new recordings to them
-                                id_mapping[tbi_id] = tbi_id
-                                result['duplicate_handled'] += 1
-                            elif decision == 'create_new':
-                                # Create new patient with OUR standard ID format (XXXX-YYYY-MM-DD-G)
-                                # Use TBI data but our ID generation
-                                new_patient_id = self.create_patient(
-                                    birthdate=birthdate,
-                                    sex=sex,
-                                    first_name=first_name,
-                                    last_name=last_name,
-                                    patient_id=None  # Generate standard format ID
-                                )
-                                id_mapping[tbi_id] = new_patient_id
-                                result['imported_patients'] += 1
-                            else:
-                                # Skip this patient
-                                result['errors'].append(f"TBI patient {tbi_id}: User chose to skip import")
-                                continue
+                            if decision == 'cancel':
+                                result['cancelled'] = True
+                                tbi_conn.close()
+                                return result
+                            
+                            decisions.append((tbi_id, decision, patient_dict, existing_patient))
                         else:
-                            # New patient (no TBI ID collision) - create with TBI ID directly
-                            self.create_patient(
-                                birthdate=birthdate,
-                                sex=sex,
-                                first_name=first_name,
-                                last_name=last_name,
-                                patient_id=tbi_id  # Use TBI ID as-is, no format conversion
-                            )
-                            id_mapping[tbi_id] = tbi_id
-                            result['imported_patients'] += 1
+                            # New patient — will be created in Phase 2
+                            decisions.append((tbi_id, 'new', patient_dict, None))
                         
                     except Exception as e:
-                        result['errors'].append(f"Error importing patient {tbi_patient.get('id')}: {str(e)}")
+                        result['errors'].append(f"Error processing patient {patient_dict.get('id', '?')}: {str(e)}")
                 
             except Exception as e:
                 result['errors'].append(f"Error reading TBI patients: {str(e)}")
             
-            # === PHASE 2: IMPORT RECORDINGS ===
+            # === PHASE 2: CREATE PATIENTS AND BUILD ID MAPPING ===
+            # id_mapping: TBI patient_id -> EyeCon patient_id
+            id_mapping = {}
+            
+            for tbi_id, decision, patient_dict, existing_patient in decisions:
+                try:
+                    first_name = patient_dict['_parsed_first_name']
+                    last_name = patient_dict['_parsed_last_name']
+                    birthdate = patient_dict['_normalized_birthdate']
+                    sex = patient_dict['_normalized_sex']
+                    
+                    if decision == 'merge':
+                        # Reuse existing patient — only add new recordings later
+                        id_mapping[tbi_id] = existing_patient['id']
+                        result['duplicate_handled'] += 1
+                        
+                    elif decision == 'new':
+                        # Use TBI ID directly as patient ID in our system
+                        self.create_patient(
+                            birthdate=birthdate,
+                            sex=sex,
+                            first_name=first_name,
+                            last_name=last_name,
+                            patient_id=tbi_id  # Keep TBI ID as-is
+                        )
+                        id_mapping[tbi_id] = tbi_id
+                        result['imported_patients'] += 1
+                        
+                    else:
+                        # Skip — do not add to id_mapping
+                        continue
+                        
+                except Exception as e:
+                    result['errors'].append(f"Error creating patient {tbi_id}: {str(e)}")
+            
+            result['id_mapping'] = id_mapping
+            
+            # === PHASE 3: IMPORT RECORDINGS (with timestamp dedup) ===
             try:
                 tbi_cur.execute("SELECT * FROM Recording")
                 tbi_recordings = tbi_cur.fetchall()
@@ -595,50 +686,65 @@ class PatientDataManager:
                     try:
                         recording_dict = dict(tbi_recording)
                         
-                        # Extract TBI recording data
                         tbi_recording_id = recording_dict.get('id')
                         tbi_patient_id = recording_dict.get('patientId')
                         date = recording_dict.get('date') or 0
                         baseline = recording_dict.get('baseline') or 0
                         
-                        # Validate foreign key
+                        # Skip recordings for patients not in id_mapping (skipped patients)
                         if tbi_patient_id not in id_mapping:
-                            result['errors'].append(f"Recording {tbi_recording_id}: Patient {tbi_patient_id} not found")
                             result['skipped_recordings'] += 1
                             continue
                         
                         eyecon_patient_id = id_mapping[tbi_patient_id]
                         
-                        # === CONVERT RECORDING ID: Android path → Local schema ===
-                        # TBI recording_id often contains Android file path (e.g., /sdcard/video.mp4)
-                        # Extract filename and convert to our schema YYYY-MM-DD-HH-MM-SS
+                        # TBI stores dates in milliseconds — convert to seconds
+                        date_seconds = int(date)
+                        if date_seconds > 9999999999:
+                            date_seconds = date_seconds // 1000
                         
-                        tbi_filename = str(tbi_recording_id).split("/")[-1]  # Get filename only
+                        # Convert Android file path to local filename
+                        tbi_filename = str(tbi_recording_id).split("/")[-1]
                         
-                        if tbi_filename in video_mapping:
-                            # NEW: Use new mapping format (patient_id, local_path)
-                            tbi_video_patient_id, local_recording_id = video_mapping[tbi_filename]
-                            # Verify mapping patient matches recording patient
-                            if tbi_video_patient_id != tbi_patient_id:
-                                result['errors'].append(f"Recording {tbi_recording_id}: Patient mismatch in video mapping")
+                        # Only import recordings that have a physical video file
+                        if tbi_filename not in video_mapping:
+                            result['skipped_recordings'] += 1
+                            continue
+                        
+                        tbi_video_patient_id, local_recording_id = video_mapping[tbi_filename]
+                        
+                        # Skip if recording ID already exists in database
+                        existing_rec = self.conn.execute(
+                            "SELECT COUNT(*) FROM recording WHERE id = ?",
+                            (local_recording_id,)
+                        ).fetchone()[0]
+                        if existing_rec > 0:
+                            result['skipped_recordings'] += 1
+                            continue
+                        
+                        # Timestamp-based duplicate check: skip if recording with
+                        # same date already exists for this patient
+                        if date_seconds > 0:
+                            existing_count = self.conn.execute(
+                                "SELECT COUNT(*) FROM recording WHERE patientId = ? AND date = ?",
+                                (eyecon_patient_id, date_seconds)
+                            ).fetchone()[0]
+                            if existing_count > 0:
                                 result['skipped_recordings'] += 1
                                 continue
-                        else:
-                            # Generate recording ID from timestamp if not mapped
-                            local_recording_id = self.generate_recording_id(date if date > 0 else None)
                         
-                        # Insert recording into our system
+                        # Insert recording into our database
                         self.add_recording(
                             recording_id=local_recording_id,
                             patient_id=eyecon_patient_id,
-                            date=int(date) if date > 0 else 0,
+                            date=date_seconds,
                             baseline=1 if baseline else 0
                         )
                         
                         result['imported_recordings'] += 1
                         
                     except Exception as e:
-                        result['errors'].append(f"Error importing recording {tbi_recording.get('id')}: {str(e)}")
+                        result['errors'].append(f"Error importing recording: {str(e)}")
                         result['skipped_recordings'] += 1
                 
             except Exception as e:

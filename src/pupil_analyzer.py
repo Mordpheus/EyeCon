@@ -2,24 +2,22 @@
 Pupil Light Reflex (PLR) Analysis Module
 
 Analyzes patient videos for pupil detection and calculates PLR biomarkers
-using classical computer vision (IR Corneal Reflex + Hough Circles) and
+using YOLOv8 object detection for pupil localization and the
 Bergamin-Kardon method for latency calculation.
 
 Detection pipeline:
-1. Detect bright IR corneal reflections as eye anchor points
-2. Set ROI around each reflection (guaranteed eye area)
-3. CLAHE contrast enhancement within ROI
-4. Hough Circle Detection for dark pupil within ROI
-5. Multi-factor scoring (darkness, size, proximity to IR reflex)
-6. Temporal tracking for frame-to-frame consistency
+1. Crop left and right eye regions from 1280x720 frame
+2. Run YOLOv8 inference on each eye crop (TFLite model)
+3. Calculate pupil diameter from bounding box dimensions
+4. Convert pixel diameter to millimeters using calibration factor
+5. PLR biomarker calculation from diameter time series
 
 Features:
-- Frame-by-frame pupil detection (classical CV, no neural network)
-- IR-reflex-anchored ROI (robust for IR close-up cameras)
+- YOLO-based pupil detection (same model as TBI Android app)
+- Dual-eye detection with fixed eye crop regions
 - Temporal filtering (Savitzky-Golay, Gaussian)
 - PLR parameter calculation (amplitude, latency, constriction/dilation velocity)
-- Database persistence
-- Lightweight: uses only OpenCV + NumPy (no PyTorch/CUDA required)
+- Lightweight: TFLite inference (no CUDA required)
 """
 
 import os
@@ -34,21 +32,37 @@ import logging
 from scipy.signal import savgol_filter
 from scipy.ndimage import gaussian_filter1d
 from scipy.interpolate import CubicSpline
+from ultralytics import YOLO
 
 logger = logging.getLogger(__name__)
 
-# IR reflex detection: minimum brightness threshold percentile
-_IR_REFLEX_BRIGHTNESS_PERCENTILE = 99.5
+# Pixel-to-millimeter calibration factor for the TBI headset camera.
+# Matches the Android app value (Factors.kt: pixelConversionFactor = 0.07).
+# Applies to the cropped eye region coordinate space.
+MM_PER_PIXEL = 0.07
 
-# Anatomical Y-band for eye position in mask recordings:
-# Eyes are never in the top 25% (forehead/mask) or bottom 33% (nose/mask).
-_EYE_Y_MIN_RATIO = 0.25
-_EYE_Y_MAX_RATIO = 0.67
+# Eye crop coordinates for 1280x720 TBI headset frames.
+# From Android app EyeCoordinates.kt -- assumes fixed headset camera geometry.
+LEFT_EYE_X = 30
+LEFT_EYE_Y = 140
+LEFT_EYE_W = 380
+LEFT_EYE_H = 320
+RIGHT_EYE_X = 850
+RIGHT_EYE_Y = 140
+RIGHT_EYE_W = 380
+RIGHT_EYE_H = 320
+REFERENCE_WIDTH = 1280
+REFERENCE_HEIGHT = 720
 
-# Pixel-to-millimeter calibration factor for the IR camera at 640x480.
-# Derived from typical Pi NoIR close-up eye distance.
-# Adjust if camera setup changes.
-MM_PER_PIXEL = 0.1
+# YOLO detection thresholds (matching Android app YOLODetector.kt)
+YOLO_CONFIDENCE = 0.6
+YOLO_IOU = 0.5
+
+# Default model path relative to project root
+YOLO_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "models", "best_float32_230.tflite"
+)
 
 
 @dataclass
@@ -101,73 +115,156 @@ class PupilAnalyzer:
     """
     Main class for pupil analysis pipeline.
 
-    Detection uses classical computer vision (no neural network):
-    - IR corneal reflex detection for eye localization
-    - Hough Circle Detection for pupil candidates within the eye ROI
-    - Multi-factor scoring: darkness + size + proximity to IR reflex
-    - Temporal tracking to stabilize detections across frames
+    Detection uses YOLOv8 with a TFLite model trained on pupil images:
+    - Crop left and right eye regions from the full frame
+    - Run YOLO inference on each crop to detect the pupil bounding box
+    - Calculate diameter from bounding box dimensions
+    - Convert to millimeters using calibrated pixel conversion factor
 
     Workflow:
     1. Load video file
     2. Frame extraction with optional pooling
-    3. IR corneal reflex detection (bright hotspot = eye center)
-    4. ROI around each reflex
-    5. Pupil detection within ROI (Hough Circles + scoring)
-    6. Temporal filtering and smoothing
-    7. PLR biomarker calculation
-    8. Database persistence
+    3. Eye region cropping (fixed coordinates for TBI headset)
+    4. YOLO pupil detection per eye crop
+    5. Diameter calculation and mm conversion
+    6. PLR biomarker calculation
     """
 
-    # Hough Circle Detection parameters
-    HOUGH_DP = 1.2              # Accumulator resolution ratio
-    HOUGH_MIN_DIST = 30         # Min distance between detected circle centers
-    HOUGH_PARAM1 = 50           # Upper Canny edge threshold
-    HOUGH_PARAM2 = 22           # Accumulator threshold (lower = more sensitive)
-    HOUGH_MIN_RADIUS = 5        # Minimum pupil radius in pixels
-    HOUGH_MAX_RADIUS = 55       # Maximum pupil radius in pixels
-
-    # CLAHE parameters for contrast enhancement
-    CLAHE_CLIP_LIMIT = 3.0      # Contrast amplification limit
-    CLAHE_TILE_SIZE = (8, 8)    # Grid size for local histogram equalization
-
-    # Scoring weights for circle candidate evaluation
-    SCORE_SIZE_WEIGHT = 1.5     # Penalty per radius pixel (prefer small circles)
-    SCORE_POSITION_WEIGHT = 0.3 # Penalty per pixel distance from IR reflex center
-
-    # Confidence normalization threshold (intensity at which confidence = 0)
-    CONFIDENCE_NORM = 180.0
-
-    # Temporal tracking: max pixel displacement between consecutive frames
-    TRACKING_MAX_JUMP = 80
-
-    # IR corneal reflex detection parameters
-    IR_ROI_HALF_SIZE = 100      # Half-width of ROI around each IR reflex (px)
-    IR_MIN_SEPARATION = 80      # Min distance between two IR reflexes (px)
-    IR_REFLEX_MIN_AREA = 3      # Min contour area for a valid IR reflex
-    IR_REFLEX_MAX_AREA = 300    # Max contour area for a valid IR reflex
-
-    def __init__(self):
+    def __init__(self, model_path: str = None):
         """
-        Initialize pupil analyzer with IR-reflex-anchored CV pipeline.
+        Initialize pupil analyzer with YOLO detection model.
 
-        No external model files required. Uses IR corneal reflections
-        (bright hotspots visible in IR camera footage) to locate eyes.
-        Detects BOTH eyes independently per frame.
+        Args:
+            model_path: Path to YOLOv8 TFLite model file.
+                        Defaults to models/best_float32_230.tflite in project root.
         """
-        # Primary eye frames (left-most eye, used for PLR metrics)
         self.pupil_frames: List[PupilFrame] = []
-        # All eye detections per frame: {frame_number: [PupilFrame, ...]}
         self.all_detections: Dict[int, List[PupilFrame]] = {}
         self.metrics: Optional[PLRMetrics] = None
 
-        # Per-eye temporal tracking: {eye_index: (x, y)}
-        self._last_positions: Dict[int, Tuple[float, float]] = {}
-        # Per-eye consecutive miss counters
-        self._consecutive_misses: Dict[int, int] = {0: 0, 1: 0}
-        self._MISS_RESET_THRESHOLD: int = 3
+        # Load YOLO model
+        path = model_path or YOLO_MODEL_PATH
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"YOLO model not found: {path}\n"
+                f"Place best_float32_230.tflite in the models/ directory."
+            )
+        self._model = YOLO(path, task="detect")
+        logger.info(f"PupilAnalyzer initialized (YOLO pipeline, model: {os.path.basename(path)})")
 
-        logger.info("PupilAnalyzer initialized (IR-reflex dual-eye pipeline)")
-    
+    def _crop_eyes(self, frame: np.ndarray) -> List[Tuple[np.ndarray, int, int, int, int, int]]:
+        """
+        Crop left and right eye regions from a full video frame.
+
+        Coordinates are scaled proportionally if the frame is not 1280x720.
+
+        Args:
+            frame: BGR video frame (numpy array)
+
+        Returns:
+            List of tuples: (crop_image, eye_index, crop_x, crop_y, crop_w, crop_h)
+            where eye_index 0 = left eye, 1 = right eye.
+        """
+        h, w = frame.shape[:2]
+
+        # Scale factor if frame is not reference resolution
+        sx = w / REFERENCE_WIDTH
+        sy = h / REFERENCE_HEIGHT
+
+        crops = []
+        for eye_idx, (ex, ey, ew, eh) in enumerate([
+            (LEFT_EYE_X, LEFT_EYE_Y, LEFT_EYE_W, LEFT_EYE_H),
+            (RIGHT_EYE_X, RIGHT_EYE_Y, RIGHT_EYE_W, RIGHT_EYE_H),
+        ]):
+            # Scale coordinates to actual frame size
+            x = int(ex * sx)
+            y = int(ey * sy)
+            crop_w = int(ew * sx)
+            crop_h = int(eh * sy)
+
+            # Clamp to frame bounds
+            x = max(0, min(x, w - 1))
+            y = max(0, min(y, h - 1))
+            x2 = min(x + crop_w, w)
+            y2 = min(y + crop_h, h)
+
+            crop = frame[y:y2, x:x2]
+            if crop.size > 0:
+                crops.append((crop, eye_idx, x, y, x2 - x, y2 - y))
+
+        return crops
+
+    def _detect_pupil_in_crop(
+        self, crop: np.ndarray, eye_index: int,
+        crop_x: int, crop_y: int, crop_w: int, crop_h: int,
+        frame_count: int, timestamp: float
+    ) -> Optional[PupilFrame]:
+        """
+        Run YOLO detection on a single eye crop and return a PupilFrame.
+
+        Diameter is calculated from the bounding box dimensions using the
+        same formula as the TBI Android app (AnalyzerScreen.kt):
+            diameter_px = (bbox_w_norm * crop_W + bbox_h_norm * crop_H) / 2.0
+
+        The normalized bbox dimensions are scaled to crop-region pixels,
+        averaged (width + height), giving the equivalent circular diameter.
+
+        Args:
+            crop: Cropped eye region (BGR numpy array)
+            eye_index: 0 = left eye, 1 = right eye
+            crop_x, crop_y: Top-left corner of crop in full frame
+            crop_w, crop_h: Dimensions of the crop region
+            frame_count: Current frame index
+            timestamp: Frame timestamp in seconds
+
+        Returns:
+            PupilFrame if pupil detected, None otherwise
+        """
+        results = self._model(crop, conf=YOLO_CONFIDENCE, iou=YOLO_IOU, verbose=False)
+        boxes = results[0].boxes
+
+        if boxes is None or len(boxes) == 0:
+            return None
+
+        # Select highest confidence detection
+        best_idx = int(boxes.conf.argmax())
+
+        # Normalized bounding box (0-1 relative to crop dimensions)
+        xywhn = boxes.xywhn[best_idx].cpu().numpy()
+        bbox_w_norm = float(xywhn[2])
+        bbox_h_norm = float(xywhn[3])
+
+        # Diameter in crop-region pixels (same formula as Android app)
+        diameter_px = (bbox_w_norm * crop_w + bbox_h_norm * crop_h) / 2.0
+
+        # Detection confidence from YOLO
+        confidence = float(boxes.conf[best_idx].cpu())
+
+        # Bounding box center in crop-local pixels
+        xywh = boxes.xywh[best_idx].cpu().numpy()
+        local_cx = float(xywh[0])
+        local_cy = float(xywh[1])
+        local_w = float(xywh[2])
+        local_h = float(xywh[3])
+
+        # Map position to full-frame coordinates
+        full_x = crop_x + local_cx
+        full_y = crop_y + local_cy
+
+        # Estimated area from bounding box
+        area_px = int(local_w * local_h)
+
+        return PupilFrame(
+            frame_number=frame_count,
+            timestamp=timestamp,
+            diameter_px=diameter_px,
+            position_x=full_x,
+            position_y=full_y,
+            confidence=confidence,
+            eye_area_px=area_px,
+            eye_index=eye_index
+        )
+
     def extract_frames_from_video(
         self,
         video_path: str,
@@ -175,10 +272,7 @@ class PupilAnalyzer:
         max_frames: Optional[int] = None
     ) -> bool:
         """
-        Extract frames from video and detect pupils using classical CV.
-
-        Performance optimization: frame_pool=2 processes every 2nd frame,
-        reducing computation by ~50% with minimal quality loss.
+        Extract frames from video and detect pupils using YOLO.
 
         Args:
             video_path: Path to video file
@@ -200,13 +294,11 @@ class PupilAnalyzer:
 
         logger.info(f"Video: {fps} FPS, {total_frames} frames total")
         logger.info(f"Frame pooling: every {frame_pool}th frame "
-                    f"= {total_frames // frame_pool} effective frames")
+                     f"= {total_frames // frame_pool} effective frames")
 
         # Reset state for new video
         self.pupil_frames = []
         self.all_detections = {}
-        self._last_positions = {}
-        self._consecutive_misses = {0: 0, 1: 0}
 
         frame_count = 0
         analyzed_frames = 0
@@ -227,11 +319,7 @@ class PupilAnalyzer:
                     break
 
                 timestamp = frame_count / fps
-                self._detect_pupil(
-                    frame=frame,
-                    frame_count=frame_count,
-                    timestamp=timestamp
-                )
+                self._detect_pupil(frame, frame_count, timestamp)
 
                 analyzed_frames += 1
                 frame_count += 1
@@ -243,375 +331,147 @@ class PupilAnalyzer:
         finally:
             cap.release()
 
-        logger.info(f"Analysis complete: {analyzed_frames} frames analyzed")
+        detected = sum(1 for pf in self.pupil_frames if not np.isnan(pf.diameter_px))
+        logger.info(f"Analysis complete: {analyzed_frames} frames analyzed, "
+                    f"{detected} detections")
         return len(self.pupil_frames) > 0
-    
-    def _detect_ir_reflections(self, gray: np.ndarray) -> List[Tuple[int, int]]:
-        """
-        Detect bright IR corneal reflections in a grayscale IR image.
-
-        The corneal reflection ("glint") is the brightest point in each eye,
-        caused by the IR LED reflecting off the cornea. These are trivial to
-        detect in IR images and provide reliable eye anchor points.
-
-        Steps:
-        1. Threshold at the top brightness percentile
-        2. Find contours of bright blobs
-        3. Filter by area (reject noise / large bright patches)
-        4. Return centroids as (x, y) anchor points
-
-        Args:
-            gray: Grayscale image (single channel, uint8)
-
-        Returns:
-            List of (center_x, center_y) for each detected IR reflex.
-            Typically 1-2 points (one per visible eye).
-        """
-        h, w = gray.shape
-
-        # Adaptive threshold: use the brightest pixels in the image
-        brightness_threshold = np.percentile(gray, _IR_REFLEX_BRIGHTNESS_PERCENTILE)
-        # Ensure threshold is at least 200 (reflexes are very bright in IR)
-        brightness_threshold = max(brightness_threshold, 200)
-
-        _, binary = cv2.threshold(gray, int(brightness_threshold), 255, cv2.THRESH_BINARY)
-
-        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        reflexes = []
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < self.IR_REFLEX_MIN_AREA or area > self.IR_REFLEX_MAX_AREA:
-                continue
-
-            M = cv2.moments(cnt)
-            if M['m00'] == 0:
-                continue
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
-
-            # Reject reflexes too close to frame border (noise)
-            if cx < 20 or cx > w - 20 or cy < 20 or cy > h - 20:
-                continue
-
-            # Reject reflexes outside the anatomical eye band.
-            # In mask recordings, eyes are between 25%-67% of frame height.
-            # Top 25% = forehead/mask frame, bottom 33% = nose/mask material.
-            if cy < h * _EYE_Y_MIN_RATIO or cy > h * _EYE_Y_MAX_RATIO:
-                continue
-
-            reflexes.append((cx, cy))
-
-        # Deduplicate: merge reflexes that are too close together
-        if len(reflexes) > 1:
-            merged = [reflexes[0]]
-            for rx, ry in reflexes[1:]:
-                too_close = False
-                for mx, my in merged:
-                    if np.sqrt((rx - mx) ** 2 + (ry - my) ** 2) < self.IR_MIN_SEPARATION:
-                        too_close = True
-                        break
-                if not too_close:
-                    merged.append((rx, ry))
-            reflexes = merged
-
-        return reflexes
-
-    def _reflexes_to_rois(
-        self, reflexes: List[Tuple[int, int]], img_shape: Tuple[int, int]
-    ) -> List[Tuple[int, int, int, int]]:
-        """
-        Convert IR reflex center points into search ROIs.
-
-        Each reflex gets a square ROI of size (2*IR_ROI_HALF_SIZE) centered
-        on the reflex point, clipped to image bounds.
-
-        Args:
-            reflexes: List of (x, y) reflex center points
-            img_shape: (height, width) of the image
-
-        Returns:
-            List of (x, y, width, height) ROI rectangles
-        """
-        h, w = img_shape
-        half = self.IR_ROI_HALF_SIZE
-        rois = []
-        for rx, ry in reflexes:
-            x1 = max(0, rx - half)
-            y1 = max(0, ry - half)
-            x2 = min(w, rx + half)
-            y2 = min(h, ry + half)
-            rois.append((x1, y1, x2 - x1, y2 - y1))
-        return rois
-
-    def _find_best_circle_in_roi(
-        self,
-        enhanced: np.ndarray,
-        roi: Tuple[int, int, int, int]
-    ) -> Optional[Tuple[int, int, int, float, float]]:
-        """
-        Run Hough Circle Detection inside a single ROI and return the best candidate.
-
-        Scoring considers three factors:
-        - Darkness: lower mean intensity inside the circle → better score
-        - Size: smaller radius → better score (pupils are smaller than irises)
-        - Centrality: closer to ROI center → better score
-
-        Args:
-            enhanced: CLAHE-enhanced grayscale image (full frame)
-            roi: Bounding box (x, y, width, height) to search within
-
-        Returns:
-            Tuple (abs_x, abs_y, radius, score, mean_intensity) in full-frame
-            coordinates, or None if no valid circle found
-        """
-        rx, ry, rw, rh = roi
-        roi_img = enhanced[ry:ry + rh, rx:rx + rw]
-
-        if roi_img.size == 0:
-            return None
-
-        circles = cv2.HoughCircles(
-            roi_img,
-            cv2.HOUGH_GRADIENT,
-            dp=self.HOUGH_DP,
-            minDist=self.HOUGH_MIN_DIST,
-            param1=self.HOUGH_PARAM1,
-            param2=self.HOUGH_PARAM2,
-            minRadius=self.HOUGH_MIN_RADIUS,
-            maxRadius=self.HOUGH_MAX_RADIUS
-        )
-
-        if circles is None:
-            return None
-
-        circles = np.uint16(np.around(circles))
-        roi_cx, roi_cy = rw / 2, rh / 2
-
-        best = None
-        best_score = float('inf')
-
-        for circle in circles[0]:
-            cx, cy, r = int(circle[0]), int(circle[1]), int(circle[2])
-
-            if r < self.HOUGH_MIN_RADIUS or r > self.HOUGH_MAX_RADIUS:
-                continue
-
-            # Reject circles that touch the ROI border (likely partial / wrong structure)
-            if cx - r < 2 or cy - r < 2 or cx + r > rw - 2 or cy + r > rh - 2:
-                continue
-
-            # Measure mean intensity inside this circle
-            mask = np.zeros(roi_img.shape, dtype=np.uint8)
-            cv2.circle(mask, (cx, cy), r, 255, -1)
-            mean_intensity = cv2.mean(roi_img, mask=mask)[0]
-
-            # Compute distance from ROI center
-            dist_from_center = np.sqrt((cx - roi_cx) ** 2 + (cy - roi_cy) ** 2)
-
-            # Combined score: darkness + size penalty + position penalty
-            score = (mean_intensity
-                     + r * self.SCORE_SIZE_WEIGHT
-                     + dist_from_center * self.SCORE_POSITION_WEIGHT)
-
-            if score < best_score:
-                best_score = score
-                # Convert ROI-local coordinates to full-frame coordinates
-                best = (rx + cx, ry + cy, r, score, mean_intensity)
-
-        return best
 
     def _detect_pupil(
-        self,
-        frame: np.ndarray,
-        frame_count: int,
-        timestamp: float
+        self, frame: np.ndarray, frame_count: int, timestamp: float
     ) -> None:
         """
-        Detect pupils in BOTH eyes using IR-reflex-anchored pipeline.
+        Detect pupils in both eyes using YOLO on cropped eye regions.
 
         Pipeline:
-        1. Convert to grayscale
-        2. Detect IR corneal reflections (bright hotspots = eye anchors)
-        3. Set ROI around EACH reflex (one per eye)
-        4. Apply Gaussian blur + CLAHE
-        5. Run Hough Circle Detection per ROI
-        6. Score candidates (darkness + size + proximity to IR reflex)
-        7. Apply per-eye temporal tracking
-        8. Store detections for each eye as separate PupilFrames
+        1. Crop left and right eye regions from full frame
+        2. Run YOLO inference on each crop
+        3. Calculate diameter from bounding box
+        4. Store detections
 
         Results stored in:
-        - self.pupil_frames: primary eye only (left-most, for PLR metrics)
-        - self.all_detections[frame_count]: list of all detected eyes
+        - self.pupil_frames: primary eye (left, eye_index=0) for PLR metrics
+        - self.all_detections[frame_count]: all detected eyes
 
         Args:
             frame: BGR video frame (numpy array)
             frame_count: Current frame index in the video
             timestamp: Timestamp of this frame in seconds
         """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        h_img, w_img = gray.shape
-
-        # Step 1: Pre-process full frame (blur + CLAHE)
-        blurred = cv2.GaussianBlur(gray, (11, 11), 0)
-
-        # Adaptive CLAHE: adjust clip limit based on overall brightness
-        mean_brightness = np.mean(blurred)
-        if mean_brightness < 60:
-            clip_limit = 5.0   # Dark image: strong contrast boost
-        elif mean_brightness > 170:
-            clip_limit = 2.0   # Bright image: gentle enhancement
-        else:
-            clip_limit = self.CLAHE_CLIP_LIMIT  # Normal conditions
-
-        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=self.CLAHE_TILE_SIZE)
-        enhanced = clahe.apply(blurred)
-
-        # Step 2: Detect IR corneal reflections (expect 0-2 per frame)
-        reflexes = self._detect_ir_reflections(gray)
-
-        # Step 2b: Sort reflexes left-to-right so eye_index 0 = left, 1 = right
-        if reflexes:
-            reflexes.sort(key=lambda r: r[0])
-
-        # Step 2c: Build ROIs — one per reflex, plus fallback from tracking
-        reflex_rois = []  # List of (roi, reflex_point_or_None)
-        if reflexes:
-            rois = self._reflexes_to_rois(reflexes, (h_img, w_img))
-            for reflex, roi in zip(reflexes, rois):
-                reflex_rois.append((roi, reflex))
-        
-        # Fallback: if we have tracking positions but no reflexes, search there
-        if not reflex_rois:
-            for eye_idx, pos in self._last_positions.items():
-                lx_i, ly_i = int(pos[0]), int(pos[1])
-                half = self.IR_ROI_HALF_SIZE
-                sx = max(0, lx_i - half)
-                sy = max(0, ly_i - half)
-                ex = min(w_img, lx_i + half)
-                ey = min(h_img, ly_i + half)
-                reflex_rois.append(((sx, sy, ex - sx, ey - sy), None))
-
-        if not reflex_rois:
-            # No reflexes, no tracking — cannot detect
-            logger.warning(f"Frame {frame_count}: No IR reflexes found")
-            self._store_miss(frame_count, timestamp)
-            return
-
-        # Step 3: Find best circle in each ROI (one pupil per eye)
-        detections = []  # List of (eye_index, x, y, r, score, intensity)
-
-        for idx, (roi, reflex_pt) in enumerate(reflex_rois):
-            candidate = self._find_best_circle_in_roi(enhanced, roi)
-            if candidate is None:
-                continue
-
-            abs_x, abs_y, r, score, mean_intensity = candidate
-
-            # Determine eye index based on X position (left=0, right=1)
-            eye_idx = 0 if abs_x < w_img / 2 else 1
-
-            # Per-eye temporal tracking: reject large jumps
-            if eye_idx in self._last_positions:
-                lx, ly = self._last_positions[eye_idx]
-                jump_dist = np.sqrt((abs_x - lx) ** 2 + (abs_y - ly) ** 2)
-                if jump_dist > self.TRACKING_MAX_JUMP:
-                    continue
-                score += jump_dist * 0.3
-
-            detections.append((eye_idx, abs_x, abs_y, r, score, mean_intensity))
-
-        # Step 4: Store detection results for each eye
+        eye_crops = self._crop_eyes(frame)
         frame_detections = []
 
-        if detections:
-            # Group by eye_index, keep the best candidate per eye
-            best_per_eye: Dict[int, tuple] = {}
-            for det in detections:
-                eye_idx = det[0]
-                score = det[4]
-                if eye_idx not in best_per_eye or score < best_per_eye[eye_idx][4]:
-                    best_per_eye[eye_idx] = det
-
-            for eye_idx, (_, x, y, r, score, mean_intensity) in best_per_eye.items():
-                diameter = 2 * r
-                confidence = max(0.0, 1.0 - (mean_intensity / self.CONFIDENCE_NORM))
-                confidence = min(confidence, 0.99)
-
-                pf = PupilFrame(
-                    frame_number=frame_count,
-                    timestamp=timestamp,
-                    diameter_px=float(diameter),
-                    position_x=float(x),
-                    position_y=float(y),
-                    confidence=confidence,
-                    eye_area_px=int(np.pi * r * r),
-                    eye_index=eye_idx
-                )
+        for crop, eye_idx, cx, cy, cw, ch in eye_crops:
+            pf = self._detect_pupil_in_crop(
+                crop, eye_idx, cx, cy, cw, ch, frame_count, timestamp
+            )
+            if pf is not None:
                 frame_detections.append(pf)
+                logger.debug(f"Frame {frame_count}: Eye {eye_idx} "
+                            f"diameter={pf.diameter_px:.1f}px, conf={pf.confidence:.2f}")
 
-                # Update per-eye tracking
-                self._last_positions[eye_idx] = (float(x), float(y))
-                self._consecutive_misses[eye_idx] = 0
-
-                logger.debug(f"Frame {frame_count}: Eye {eye_idx} at ({x}, {y}), "
-                             f"diameter={diameter:.1f}px, conf={confidence:.2f}")
-
-        # Store all eye detections for this frame
         self.all_detections[frame_count] = frame_detections
 
-        # Per-eye miss tracking: increment miss counter for eyes NOT detected
-        detected_eye_indices = {d.eye_index for d in frame_detections}
-        for eye_idx in list(self._consecutive_misses.keys()):
-            if eye_idx not in detected_eye_indices:
-                self._consecutive_misses[eye_idx] = self._consecutive_misses.get(eye_idx, 0) + 1
-                if self._consecutive_misses[eye_idx] >= self._MISS_RESET_THRESHOLD:
-                    logger.info(f"Frame {frame_count}: Eye {eye_idx} — "
-                                f"{self._consecutive_misses[eye_idx]} consecutive misses, "
-                                f"resetting tracking")
-                    self._last_positions.pop(eye_idx, None)
-                    self._consecutive_misses[eye_idx] = 0
-
-        # Store primary eye (eye_index=0, left) in pupil_frames for PLR metrics
+        # Store primary eye (left, eye_index=0) in pupil_frames for PLR metrics
         primary = [d for d in frame_detections if d.eye_index == 0]
         if primary:
             self.pupil_frames.append(primary[0])
         elif frame_detections:
-            # Only one eye detected — use whichever we have
+            # Only one eye detected -- use whichever we have
             self.pupil_frames.append(frame_detections[0])
         else:
-            self._store_miss(frame_count, timestamp)
+            # No detection in either eye
+            self.pupil_frames.append(PupilFrame(
+                frame_number=frame_count,
+                timestamp=timestamp,
+                diameter_px=np.nan,
+                position_x=np.nan,
+                position_y=np.nan,
+                confidence=0.0,
+                eye_area_px=0
+            ))
 
-    def _store_miss(self, frame_count: int, timestamp: float) -> None:
+
+    def detect_light_stimulus_frames(
+        self, light_duration: float = 1.0
+    ) -> tuple:
         """
-        Record a missed detection and handle tracking reset.
+        Detect light stimulus onset from pupil constriction pattern.
 
-        After _MISS_RESET_THRESHOLD consecutive misses per eye, resets that
-        eye's tracking so the next frame does a full search for it.
+        Uses the point of steepest diameter decrease (maximum negative
+        velocity) to infer when the light turned on, accounting for
+        ~200 ms PLR latency.  This is more robust than relying on
+        hardcoded timestamps because the video file may not start at
+        the same moment the recording thread begins timing.
+
+        Args:
+            light_duration: Expected duration of light stimulus in seconds
+                            (default 1.0 s).
+
+        Returns:
+            (start_frame, end_frame) indices into self.pupil_frames.
         """
-        for eye_idx in list(self._consecutive_misses.keys()):
-            self._consecutive_misses[eye_idx] = self._consecutive_misses.get(eye_idx, 0) + 1
-            if self._consecutive_misses[eye_idx] >= self._MISS_RESET_THRESHOLD:
-                logger.info(f"Frame {frame_count}: Eye {eye_idx} — "
-                            f"{self._consecutive_misses[eye_idx]} consecutive misses, "
-                            f"resetting tracking")
-                self._last_positions.pop(eye_idx, None)
-                self._consecutive_misses[eye_idx] = 0
+        if not self.pupil_frames:
+            raise ValueError("No pupil frames available.")
 
-        logger.warning(f"Frame {frame_count}: No pupil detected")
+        diameters = np.array([f.diameter_px for f in self.pupil_frames])
+        timestamps = np.array([f.timestamp for f in self.pupil_frames])
 
-        # Store empty detection for this frame
-        self.all_detections[frame_count] = []
-        self.pupil_frames.append(PupilFrame(
-            frame_number=frame_count,
-            timestamp=timestamp,
-            diameter_px=np.nan,
-            position_x=np.nan,
-            position_y=np.nan,
-            confidence=0.0,
-            eye_area_px=0
-        ))
-    
+        # Interpolate NaN values for velocity calculation
+        nan_mask = np.isnan(diameters)
+        if np.sum(~nan_mask) >= 2:
+            diameters_clean = diameters.copy()
+            diameters_clean[nan_mask] = np.interp(
+                np.where(nan_mask)[0],
+                np.where(~nan_mask)[0],
+                diameters[~nan_mask]
+            )
+        else:
+            diameters_clean = diameters
+
+        # Smooth to reduce noise before differentiation
+        from scipy.signal import savgol_filter
+        if len(diameters_clean) >= 7:
+            smooth = savgol_filter(diameters_clean, window_length=7, polyorder=2)
+        else:
+            smooth = diameters_clean
+
+        # Numerical velocity (3-point central difference)
+        n = len(smooth)
+        velocity = np.zeros(n)
+        for i in range(1, n - 1):
+            dt = timestamps[i + 1] - timestamps[i - 1]
+            if dt > 0:
+                velocity[i] = (smooth[i + 1] - smooth[i - 1]) / dt
+
+        # Maximum constriction velocity = most negative velocity
+        # Search only in first 60% of recording to avoid confusing recovery
+        search_end = int(n * 0.6)
+        if search_end < 3:
+            search_end = n - 1
+        max_constr_idx = int(np.argmin(velocity[1:search_end]) + 1)
+
+        # Light onset ≈ max-constriction time − 200 ms PLR latency
+        PLR_LATENCY = 0.2  # seconds
+        light_onset_time = timestamps[max_constr_idx] - PLR_LATENCY
+        light_onset_time = max(0.0, light_onset_time)
+        light_end_time = light_onset_time + light_duration
+
+        # Convert times back to frame indices
+        start_frame = int(np.argmin(np.abs(timestamps - light_onset_time)))
+        end_frame = int(np.argmin(np.abs(timestamps - light_end_time)))
+
+        # Clamp to valid range
+        start_frame = max(1, min(start_frame, n - 2))
+        end_frame = max(start_frame + 1, min(end_frame, n - 1))
+
+        logger.info(
+            f"Auto-detected light stimulus: "
+            f"frames {start_frame}-{end_frame} "
+            f"({timestamps[start_frame]:.2f}-{timestamps[end_frame]:.2f}s), "
+            f"max constriction at frame {max_constr_idx} ({timestamps[max_constr_idx]:.2f}s)"
+        )
+        return start_frame, end_frame
+
     def calculate_plr_metrics(
         self,
         light_stimulus_start_frame: int,
@@ -843,7 +703,7 @@ class PupilAnalyzer:
             prt_63 or (timestamps[-1] - stim_end_time),
             prt_75 or (timestamps[-1] - stim_end_time)
         )
-    
+
     def extract_key_frames_for_preview(
         self,
         video_path: str,
@@ -852,8 +712,8 @@ class PupilAnalyzer:
         """
         Extract equally-spaced key frames from video for quick preview.
 
-        Runs the full CV detection pipeline on each key frame independently
-        (no temporal tracking). Detects BOTH eyes per frame.
+        Runs YOLO detection on each key frame independently.
+        Detects both eyes per frame.
 
         Args:
             video_path: Path to video file
@@ -891,39 +751,22 @@ class PupilAnalyzer:
 
                 timestamp = frame_idx / fps
 
-                # Run single-frame detection using IR reflex anchoring
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                blurred = cv2.GaussianBlur(gray, (11, 11), 0)
-                clahe = cv2.createCLAHE(
-                    clipLimit=self.CLAHE_CLIP_LIMIT,
-                    tileGridSize=self.CLAHE_TILE_SIZE
-                )
-                enhanced = clahe.apply(blurred)
-
-                reflexes = self._detect_ir_reflections(gray)
-
-                # Sort left-to-right for consistent eye indexing
-                if reflexes:
-                    reflexes.sort(key=lambda r: r[0])
-
-                eye_rois = self._reflexes_to_rois(reflexes, gray.shape)
-
-                # Find best circle per ROI (one per eye)
+                # Run YOLO detection on eye crops
+                eye_crops = self._crop_eyes(frame)
                 eye_results = []
-                for roi in eye_rois:
-                    candidate = self._find_best_circle_in_roi(enhanced, roi)
-                    if candidate is not None:
-                        cx, cy, r, score, intensity = candidate
-                        confidence = max(0.0, 1.0 - (intensity / self.CONFIDENCE_NORM))
-                        confidence = min(confidence, 0.99)
+
+                for crop, eye_idx, cx, cy, cw, ch in eye_crops:
+                    pf = self._detect_pupil_in_crop(
+                        crop, eye_idx, cx, cy, cw, ch, int(frame_idx), timestamp
+                    )
+                    if pf is not None:
                         eye_results.append({
-                            'position': (float(cx), float(cy)),
-                            'diameter_px': float(2 * r),
-                            'confidence': float(confidence)
+                            'position': (pf.position_x, pf.position_y),
+                            'diameter_px': pf.diameter_px,
+                            'confidence': pf.confidence
                         })
 
                 if eye_results:
-                    # Primary eye = first (left-most)
                     primary = eye_results[0]
                     key_frames_data.append({
                         'frame_number': int(frame_idx),

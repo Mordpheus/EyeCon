@@ -867,13 +867,16 @@ class RecordingPlayerScreen(QWidget):
                       fontweight="bold", rotation=90)
         ax.set_title("Pupil Diameter", color="#333", fontsize=11, fontweight="bold")
 
-        # Light impulse shaded area + label
-        ax.axvspan(1.0, 2.0, alpha=0.18, color="#ffaa00", zorder=0)
-        ax.axvline(x=1.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
-        ax.axvline(x=2.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        # Light impulse shaded area + label (LED protocol: 1.0-2.0s)
+        light_s = 1.0
+        light_e = 2.0
+        ax.axvspan(light_s, light_e, alpha=0.18, color="#ffaa00", zorder=0)
+        ax.axvline(x=light_s, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.axvline(x=light_e, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
         # "Lichtimpuls" label above the shaded zone
         y_top = d_max + d_margin * 0.3
-        ax.text(1.5, y_top, "Lichtimpuls", ha="center", va="bottom",
+        light_mid = (light_s + light_e) / 2.0
+        ax.text(light_mid, y_top, "Lichtimpuls", ha="center", va="bottom",
                 fontsize=7, fontweight="bold", color="#333",
                 bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffaa00",
                           edgecolor="none", alpha=0.85))
@@ -971,21 +974,26 @@ class RecordingPlayerScreen(QWidget):
             self.duration_label.setText("--:--")
     
     def _on_preview_timer(self):
-        """Update live preview during recording with actual camera frames."""
+        """Update live preview during recording using already-captured frames.
+        
+        IMPORTANT: During recording, we must NOT call get_frame() / capture.read()
+        because the recording thread is already reading from the camera.
+        Two threads reading from the same capture device causes frame stealing
+        and reduces the effective FPS of the recording.
+        Instead, we display the last frame from the recording buffer.
+        """
         if not self.is_recording or not self.camera_controller:
             return
         
         try:
-            # Get current frame from camera (PIL Image)
-            frame = self.camera_controller.get_frame()
-            if frame:
-                # Convert PIL Image to numpy array
-                frame_np = np.array(frame)
+            # Use the last frame from the recording buffer (already captured by recording thread)
+            if self.camera_controller.recording_frames:
+                frame_rgb, elapsed = self.camera_controller.recording_frames[-1]
                 
-                # Convert RGB to QImage
-                height, width, channel = frame_np.shape
+                # frame_rgb is already in RGB format (numpy array)
+                height, width, channel = frame_rgb.shape
                 bytes_per_line = 3 * width
-                q_img = QImage(frame_np.data, width, height, bytes_per_line, QImage.Format_RGB888)
+                q_img = QImage(frame_rgb.data, width, height, bytes_per_line, QImage.Format_RGB888)
                 
                 # Convert to QPixmap
                 pixmap = QPixmap.fromImage(q_img)
@@ -993,6 +1001,12 @@ class RecordingPlayerScreen(QWidget):
                 # Scale to fit label while maintaining aspect ratio
                 scaled = pixmap.scaledToHeight(self.preview_label.height(), Qt.SmoothTransformation)
                 self.preview_label.setPixmap(scaled)
+                
+                # Update recording progress info
+                frame_count = len(self.camera_controller.recording_frames)
+                self.recording_info.setText(
+                    f"RECORDING: {elapsed:.1f}s / 8.0s — {frame_count} Frames"
+                )
         except Exception as e:
             print(f"[RecordingPlayerScreen._on_preview_timer] Error: {e}")
     

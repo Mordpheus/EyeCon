@@ -295,7 +295,7 @@ class PLRTestScreen(QWidget):
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
             
-            # Use Haar Cascade + Hough Circle Detection pipeline
+            # YOLO-based pupil detection pipeline
             analyzer = PupilAnalyzer()
             
             # Extract ALL frames from video for full analysis (frame_pool=1)
@@ -375,17 +375,11 @@ class PLRTestScreen(QWidget):
             rec_diameters = np.array([pf.diameter_px for pf in analyzer.pupil_frames]) * MM_PER_PIXEL
             
             try:
-                # Recording protocol: 0-1s IR baseline, 1-2s LED flash, 2-8s recovery
-                # frame_pool=1, so use fps directly
+                # LED protocol: light ON at 1.0s, OFF at 2.0s (hardcoded, same for headset and own recordings)
                 light_start_frame = int(1.0 * fps)
                 light_end_frame = int(2.0 * fps)
                 
-                # Clamp to valid range
-                n_frames = len(analyzer.pupil_frames)
-                light_start_frame = min(light_start_frame, n_frames - 2)
-                light_end_frame = min(light_end_frame, n_frames - 1)
-                
-                if light_start_frame > 0 and light_end_frame > light_start_frame:
+                if light_start_frame > 0 and light_end_frame > light_start_frame and light_end_frame < len(analyzer.pupil_frames):
                     metrics = analyzer.calculate_plr_metrics(
                         light_start_frame, light_end_frame
                     )
@@ -415,7 +409,9 @@ class PLRTestScreen(QWidget):
                 except Exception as e:
                     logger.warning(f"Baseline analysis for comparison failed: {e}")
             
-            self._draw_comparison_plot(rec_times, rec_diameters, baseline_times, baseline_diameters)
+            # LED protocol: hardcoded 1.0-2.0s (identical for all recordings)
+            self._draw_comparison_plot(rec_times, rec_diameters, baseline_times, baseline_diameters,
+                                       light_start=1.0, light_end=2.0)
             
             self.status_label.setText("Analyse abgeschlossen")
             self.progress_bar.setVisible(False)
@@ -473,7 +469,8 @@ class PLRTestScreen(QWidget):
             dialog.exec()
     
     def _draw_comparison_plot(self, rec_times, rec_diameters,
-                              baseline_times=None, baseline_diameters=None):
+                              baseline_times=None, baseline_diameters=None,
+                              light_start=1.0, light_end=2.0):
         """Draw comparison plot: recording vs baseline pupil diameter over time."""
         self.comparison_figure.clear()
         self.comparison_figure.patch.set_facecolor("#f5f5f5")
@@ -484,10 +481,10 @@ class PLRTestScreen(QWidget):
         for spine in ax.spines.values():
             spine.set_color("#ccc")
 
-        # Light impulse shaded area (1-2s)
-        ax.axvspan(1.0, 2.0, alpha=0.18, color="#ffaa00", zorder=0)
-        ax.axvline(x=1.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
-        ax.axvline(x=2.0, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        # Light impulse shaded area (auto-detected)
+        ax.axvspan(light_start, light_end, alpha=0.18, color="#ffaa00", zorder=0)
+        ax.axvline(x=light_start, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.axvline(x=light_end, color="#e6a000", linewidth=0.8, linestyle="--", alpha=0.5)
 
         has_data = False
 
@@ -546,7 +543,8 @@ class PLRTestScreen(QWidget):
             # "Lichtimpuls" label
             y_lim = ax.get_ylim()
             y_top = y_lim[1] - (y_lim[1] - y_lim[0]) * 0.05
-            ax.text(1.5, y_top, "Lichtimpuls", ha="center", va="top",
+            light_mid = (light_start + light_end) / 2.0
+            ax.text(light_mid, y_top, "Lichtimpuls", ha="center", va="top",
                     fontsize=7, fontweight="bold", color="#333",
                     bbox=dict(boxstyle="round,pad=0.2", facecolor="#ffaa00",
                               edgecolor="none", alpha=0.85))

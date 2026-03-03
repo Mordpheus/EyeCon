@@ -494,12 +494,18 @@ class CameraController:
         try:
             logger.info(f"[_recording_thread START] is_baseline={is_baseline}, patient_id={patient_id}, duration={duration}s")
             frame_count = 0
-            start_time = time.time()
             led_activated = False
             
-            # LED aus am Start
+            # LED aus am Start (BEFORE timing starts to avoid serial delay)
             self.led_off()
             logger.info(f"[_recording_thread] LED OFF at start, is_baseline={is_baseline}")
+            
+            # Flush camera buffer: discard stale frames
+            for _ in range(10):
+                self.capture.read()
+            
+            # Start timer AFTER led_off and buffer flush
+            start_time = time.time()
             
             while (time.time() - start_time) < duration and not self.stop_recording_requested:
                 elapsed = time.time() - start_time
@@ -599,7 +605,20 @@ class CameraController:
             
             # Definiere Codec und VideoWriter
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            fps = 20  # Recording-FPS (standardisiert)
+            
+            # Calculate actual FPS from real wall-clock timestamps
+            if len(self.recording_frames) >= 2:
+                first_ts = self.recording_frames[0][1]
+                last_ts = self.recording_frames[-1][1]
+                real_duration = last_ts - first_ts
+                if real_duration > 0:
+                    fps = len(self.recording_frames) / real_duration
+                else:
+                    fps = 20
+            else:
+                fps = 20
+            
+            logger.info(f"Calculated actual FPS: {fps:.1f} ({len(self.recording_frames)} frames / {real_duration:.2f}s)")
             out = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
             
             if not out.isOpened():
@@ -669,14 +688,24 @@ class CameraController:
             recording_type = "Baseline" if is_baseline else "Pupillometrie"
             logger.info(f"Starte {recording_type}-Recording: {duration}s (patient_id={patient_id})")
             
+            # LED aus am Start (BEFORE timing starts to avoid serial delay in the loop)
+            self.led_off()
+            
+            # Flush camera buffer: discard stale frames so the first recorded
+            # frame is truly "live". OpenCV buffers ~5 frames internally.
+            for _ in range(10):
+                if self.capture_lock:
+                    with self.capture_lock:
+                        self.capture.read()
+                else:
+                    self.capture.read()
+            
             # Recording-Schleife
             LED_ON_DURATION = 1.0  # Korrekt: 1.0-2.0s (nicht 1.0-1.5s)
             frame_count = 0
+            # Start timer AFTER led_off and buffer flush are done
             start_time = time.time()
             led_activated = False
-            
-            # LED aus am Start
-            self.led_off()
             
             while (time.time() - start_time) < duration and not self.stop_recording_requested:
                 elapsed = time.time() - start_time

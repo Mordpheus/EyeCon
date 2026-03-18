@@ -47,7 +47,7 @@ print(f"\n[4] Testing get_recordings() for each patient (folders empty so far):"
 for patient in patients:
     patient_id = patient['id']
     recordings = db.get_recordings(str(patient_id))
-    status = f"✓ {len(recordings)} videos" if len(recordings) == 0 else f"⚠ {len(recordings)} videos (should be 0)"
+    status = f"{len(recordings)} videos" if len(recordings) == 0 else f"{len(recordings)} videos (should be 0)"
     print(f"    Patient {patient_id}: {status}")
 
 # Show folder structure

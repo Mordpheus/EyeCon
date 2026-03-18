@@ -39,7 +39,7 @@ if __name__ == "__main__":
 
         # === Create main window ===
         win = QMainWindow()
-        win.setWindowTitle("Layout Prototype")
+        win.setWindowTitle("EyeCon Prototype")
         win.resize(1200, 800)
         
         # Try to load app layout (will handle missing hardware gracefully)

@@ -2425,7 +2425,12 @@ Möchten Sie erneut versuchen?"""
         
         # Switch to PLR test screen and start analysis
         self.stacked_widget.setCurrentIndex(4)
-        self.plr_test_screen.load_video(video_path, baseline_path)
+        self.plr_test_screen.load_video(
+            video_path,
+            baseline_path,
+            recording_id=video_path,
+            patient_id=patient_id,
+        )
     
     def _on_recording_back_clicked(self) -> None:
         """
@@ -2781,7 +2786,12 @@ class AppLayout(QWidget):
                             if bl_path and Path(bl_path).exists():
                                 baseline_path = bl_path
                             break
-                self.center.plr_test_screen.load_video(video_path, baseline_path)
+                self.center.plr_test_screen.load_video(
+                    video_path,
+                    baseline_path,
+                    recording_id=video_path,
+                    patient_id=patient_id,
+                )
             return
         
         # Normal flow: show in recording player

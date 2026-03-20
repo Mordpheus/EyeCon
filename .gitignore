@@ -10,7 +10,7 @@ data/recordings/
 # Ignoriere eingebetteten EyeCon-Ordner
 EyeCon/
 
-# YOLOv8 Modelle (große Dateien)
+# YOLO Modelle (große Dateien)
 *.pt
 *.onnx
 

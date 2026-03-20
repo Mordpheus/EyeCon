@@ -2,12 +2,12 @@
 Pupil Light Reflex (PLR) Analysis Module
 
 Analyzes patient videos for pupil detection and calculates PLR biomarkers
-using YOLOv8 object detection for pupil localization and the
+using YOLO object detection for pupil localization and the
 Bergamin-Kardon method for latency calculation.
 
 Detection pipeline:
 1. Crop left and right eye regions from 1280x720 frame
-2. Run YOLOv8 inference on each eye crop (TFLite model)
+2. Run YOLO inference on each eye crop (TFLite model)
 3. Calculate pupil diameter from bounding box dimensions
 4. Convert pixel diameter to millimeters using calibration factor
 5. PLR biomarker calculation from diameter time series
@@ -115,7 +115,7 @@ class PupilAnalyzer:
     """
     Main class for pupil analysis pipeline.
 
-    Detection uses YOLOv8 with a TFLite model trained on pupil images:
+    Detection uses Ultralytics YOLO with a TFLite model trained on pupil images:
     - Crop left and right eye regions from the full frame
     - Run YOLO inference on each crop to detect the pupil bounding box
     - Calculate diameter from bounding box dimensions
@@ -135,7 +135,7 @@ class PupilAnalyzer:
         Initialize pupil analyzer with YOLO detection model.
 
         Args:
-            model_path: Path to YOLOv8 TFLite model file.
+            model_path: Path to YOLO TFLite model file.
                         Defaults to models/best_float32_230.tflite in project root.
         """
         self.pupil_frames: List[PupilFrame] = []

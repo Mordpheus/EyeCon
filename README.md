@@ -64,6 +64,10 @@ EyeCon/
 | Pillow | 10.0.0+ | Image handling |
 | pyserial | 3.5+ | Serial communication (LED trigger) |
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on how to review pull requests, open issues, and submit your own changes.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

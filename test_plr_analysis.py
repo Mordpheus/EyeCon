@@ -12,6 +12,7 @@ For testing without a real video, set CREATE_DEMO_DATA=True
 """
 
 import sys
+import time
 import numpy as np
 from pathlib import Path
 from dataclasses import asdict
@@ -36,10 +37,10 @@ def create_demo_pupil_frames(num_frames: int = 300) -> tuple[list, str]:
     - Stimulus from frame 30-60 (1-2 seconds)
     - Normal pupil dynamics
     """
-    print("\n📊 Creating demo pupil data...")
+    print("\nCreating demo pupil data...")
     
     frames = []
-    recording_id = "demo_2026-02-24-14-00-00"
+    recording_id = f"demo_{int(time.time())}"
     
     # Create realistic pupil diameter curve
     baseline_diameter = 4.0  # mm
@@ -92,7 +93,7 @@ def create_demo_pupil_frames(num_frames: int = 300) -> tuple[list, str]:
             'eye_area_px': int(diameter * 10 * 20)  # Approximate area
         })
     
-    print(f"✅ Created {len(frames)} synthetic frames")
+    print(f"Created {len(frames)} synthetic frames")
     print(f"   - Baseline: frames 0-30 (diameter ~40px)")
     print(f"   - Stimulus: frames 30-60 (constriction)")
     print(f"   - Recovery: frames 60-150 (dilation)")
@@ -104,7 +105,7 @@ def test_pupil_analysis():
     """Test the complete pupil analysis pipeline."""
     
     print("\n" + "="*70)
-    print("🧪 PLR (PUPIL LIGHT REFLEX) ANALYSIS - DEMO")
+    print("PLR (PUPIL LIGHT REFLEX) ANALYSIS - DEMO")
     print("="*70)
     
     # Step 1: Create or load pupil data
@@ -112,10 +113,10 @@ def test_pupil_analysis():
         pupil_frames, recording_id = create_demo_pupil_frames(num_frames=300)
     else:
         if not DEMO_VIDEO_PATH:
-            print("❌ No video path specified. Set DEMO_VIDEO_PATH or use CREATE_DEMO_DATA=True")
+            print("No video path specified. Set DEMO_VIDEO_PATH or use CREATE_DEMO_DATA=True")
             return
         
-        print(f"\n📹 Loading video: {DEMO_VIDEO_PATH}")
+        print(f"\nLoading video: {DEMO_VIDEO_PATH}")
         analyzer = PupilAnalyzer()
         success = analyzer.extract_frames_from_video(
             DEMO_VIDEO_PATH,
@@ -124,7 +125,7 @@ def test_pupil_analysis():
         )
         
         if not success:
-            print("❌ Failed to load video")
+            print("Failed to load video")
             return
         
         pupil_frames = [asdict(pf) for pf in analyzer.pupil_frames]
@@ -137,7 +138,7 @@ def test_pupil_analysis():
     for frame_data in pupil_frames:
         analyzer.pupil_frames.append(PupilFrame(**frame_data))
     
-    print(f"\n📊 Pupil data loaded:")
+    print(f"\nPupil data loaded:")
     print(f"   - Total frames: {len(analyzer.pupil_frames)}")
     print(f"   - Duration: {analyzer.pupil_frames[-1].timestamp:.2f} seconds")
     
@@ -151,56 +152,56 @@ def test_pupil_analysis():
     light_stimulus_start = 30
     light_stimulus_end = 60
     
-    print(f"\n💡 Light stimulus: frames {light_stimulus_start}-{light_stimulus_end}")
+    print(f"\nLight stimulus: frames {light_stimulus_start}-{light_stimulus_end}")
     
     try:
         metrics = analyzer.calculate_plr_metrics(
             light_stimulus_start_frame=light_stimulus_start,
             light_stimulus_end_frame=light_stimulus_end
         )
-        print("\n✅ PLR metrics calculated successfully!")
+        print("\nPLR metrics calculated successfully!")
     except Exception as e:
-        print(f"❌ Error calculating metrics: {e}")
+        print(f"Error calculating metrics: {e}")
         import traceback
         traceback.print_exc()
         return
     
     # Step 4: Display results
     print("\n" + "="*70)
-    print("📋 PLR BIOMARKER RESULTS")
+    print("PLR BIOMARKER RESULTS")
     print("="*70)
     
-    print(f"\n🔷 BASELINE (before stimulus):")
+    print(f"\nBASELINE (before stimulus):")
     print(f"   Mean diameter:    {metrics.baseline_mean:.2f} px")
     print(f"   Max diameter:     {metrics.baseline_max:.2f} px")
     print(f"   Min diameter:     {metrics.baseline_min:.2f} px")
     
-    print(f"\n⚡ LATENCY (Bergamin-Kardon method):")
+    print(f"\nLATENCY (Bergamin-Kardon method):")
     print(f"   Latency time:     {metrics.latency*1000:.1f} ms")
     print(f"   At frame:         {metrics.latency_frame_idx}")
     
-    print(f"\n📉 CONSTRICTION (pupil closing):")
+    print(f"\nCONSTRICTION (pupil closing):")
     print(f"   Peak velocity:    {metrics.peak_constriction_velocity:.4f} px/s")
     print(f"   At frame:         {metrics.peak_constriction_velocity_frame}")
     print(f"   Average velocity: {metrics.average_constriction_velocity:.4f} px/s")
     
-    print(f"\n📊 AMPLITUDE & MINIMUM:")
+    print(f"\nAMPLITUDE & MINIMUM:")
     print(f"   Minimum diameter: {metrics.minimum_diameter:.2f} px")
     print(f"   At frame:         {metrics.minimum_diameter_frame}")
     print(f"   Amplitude:        {metrics.amplitude:.2f} px")
     
-    print(f"\n📈 DILATION (pupil reopening):")
+    print(f"\nDILATION (pupil reopening):")
     print(f"   Peak velocity:    {metrics.peak_dilation_velocity:.4f} px/s")
     print(f"   At frame:         {metrics.peak_dilation_velocity_frame}")
     print(f"   Average velocity: {metrics.average_dilation_velocity:.4f} px/s")
     
-    print(f"\n⏱️  PUPIL RECOVERY TIME (PRT):")
+    print(f"\nPUPIL RECOVERY TIME (PRT):")
     print(f"   PRT-50 (50%):     {metrics.prt_50*1000:.1f} ms")
     print(f"   PRT-63 (63%):     {metrics.prt_63*1000:.1f} ms")
     print(f"   PRT-75 (75%):     {metrics.prt_75*1000:.1f} ms")
     
     # Step 5: Save to database
-    print(f"\n💾 Saving to database...")
+    print(f"\nSaving to database...")
     db = PatientDataManager("data/eyecon.db")
     
     # First find or create a test recording
@@ -208,20 +209,21 @@ def test_pupil_analysis():
     if patients:
         patient_id = patients[0]['id']
         recordings = db.get_recordings(patient_id)
+        print(f"   DEBUG: recording_id = {recording_id!r}")
+        print(f"   DEBUG: recordings = {recordings}")
         recording_exists = any(r['id'] == recording_id for r in recordings) if recordings else False
-        
         if not recording_exists:
             db.add_recording(recording_id, patient_id, date=1771910000, baseline=0)
             print(f"   Created recording: {recording_id}")
         else:
             print(f"   Using existing recording: {recording_id}")
     else:
-        print("   ⚠️  No patients in database, skipping recording creation")
+        print("   No patients in database, skipping recording creation")
         return
     
     # Save pupil frames
     frame_count = db.save_pupil_frames(recording_id, pupil_frames)
-    print(f"   ✅ Saved {frame_count} pupil frames")
+    print(f"   Saved {frame_count} pupil frames")
     
     # Save PLR metrics
     metrics_dict = asdict(metrics)
@@ -233,9 +235,9 @@ def test_pupil_analysis():
     )
     
     if success:
-        print(f"   ✅ Saved PLR metrics")
+        print(f"   Saved PLR metrics")
     else:
-        print(f"   ❌ Failed to save PLR metrics")
+        print(f"   Failed to save PLR metrics")
     
     # Log analysis session
     session_id = db.create_analysis_session(
@@ -244,22 +246,22 @@ def test_pupil_analysis():
         analyzed_frame_count=len(analyzer.pupil_frames),
         status="completed"
     )
-    print(f"   ✅ Created analysis session: {session_id}")
+    print(f"   Created analysis session: {session_id}")
     
     # Step 6: Verify by reading back
-    print(f"\n🔍 Verification - Reading back from database:")
+    print(f"\nVerification - Reading back from database:")
     retrieved_frames = db.get_pupil_frames(recording_id)
     retrieved_metrics = db.get_plr_metrics(recording_id)
     
     if retrieved_frames:
-        print(f"   ✅ Retrieved {len(retrieved_frames)} pupil frames")
+        print(f"   Retrieved {len(retrieved_frames)} pupil frames")
     if retrieved_metrics:
-        print(f"   ✅ Retrieved PLR metrics")
+        print(f"   Retrieved PLR metrics")
         print(f"      - Latency: {retrieved_metrics['latency']*1000:.1f} ms")
         print(f"      - Amplitude: {retrieved_metrics['amplitude']:.2f} px")
     
     print(f"\n" + "="*70)
-    print("✅ PLR ANALYSIS COMPLETE")
+    print("PLR ANALYSIS COMPLETE")
     print("="*70)
 
 

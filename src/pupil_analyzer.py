@@ -655,8 +655,8 @@ class PupilAnalyzer:
         
         idx_interp = np.where(mask)[0][0] + idx_rel
         
-        # Map back to original frame index
-        frame_idx = int(idx_interp * (len(signal) / len(signal_interp)))
+        # Map back to original frame index. After Fixx This maps the timestamp of the detected acceleration maximum directly to the nearest original frame independent of the interpolation rate. Reason why Latency 0.00 in Tests
+        frame_idx = int(np.argmin(np.abs(time - t_interp[idx_interp])))
         
         return frame_idx, {
             "type": "acceleration",

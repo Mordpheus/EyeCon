@@ -46,7 +46,7 @@ def migrate_recordings():
     default_patient = patients[0]
     default_patient_id = default_patient['id']
     
-    print(f"⚠️  ATTENTION: Moving all videos to patient: {default_patient['last_name']}, {default_patient['first_name']} (ID: {default_patient_id})")
+    print(f"ATTENTION: Moving all videos to patient: {default_patient['last_name']}, {default_patient['first_name']} (ID: {default_patient_id})")
     print("You should manually move videos to correct patient folders if needed.\n")
     
     for patient in patients:
@@ -65,12 +65,12 @@ def migrate_recordings():
         
         try:
             shutil.move(str(video_file), str(dest_path))
-            print(f"✓ Moved {video_file.name} → {dest_folder.name}/")
+            print(f"Moved {video_file.name} to {dest_folder.name}/")
             moved_count += 1
         except Exception as e:
             print(f"✗ ERROR moving {video_file.name}: {e}")
     
-    print(f"\n✓ Migration complete: {moved_count} files moved")
+    print(f"\nMigration complete: {moved_count} files moved")
     print(f"\nNew structure:")
     print(f"  data/recordings/")
     for patient in patients:

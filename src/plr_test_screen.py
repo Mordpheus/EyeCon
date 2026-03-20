@@ -5,6 +5,7 @@ Provides visual testing interface for pupil detection on video frames.
 
 import cv2
 import numpy as np
+from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QLabel, QScrollArea, QDialog,
@@ -20,6 +21,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from scipy.signal import savgol_filter
 
 from src.pupil_analyzer import MM_PER_PIXEL
+from data_manager import PatientDataManager
 
 logger = logging.getLogger(__name__)
 
@@ -219,8 +221,11 @@ class PLRTestScreen(QWidget):
         
         self.current_video_path = None
         self.current_baseline_path = None
+        self.current_recording_id = None
+        self.current_patient_id = None
         self.current_frames = []
         self.current_analysis = None
+        self._db_manager = None
     
     def init_ui(self):
         """Initialize user interface."""
@@ -273,13 +278,21 @@ class PLRTestScreen(QWidget):
         
         self.setLayout(layout)
     
-    def load_video(self, file_path: str, baseline_path: str = None):
+    def load_video(
+        self,
+        file_path: str,
+        baseline_path: str = None,
+        recording_id: str = None,
+        patient_id: str = None,
+    ):
         """Load and analyze a video file with optional baseline comparison."""
         if not file_path:
             return
         
         self.current_video_path = file_path
         self.current_baseline_path = baseline_path
+        self.current_recording_id = recording_id or file_path
+        self.current_patient_id = patient_id
         self.run_analysis()
     
     def run_analysis(self):
@@ -294,6 +307,7 @@ class PLRTestScreen(QWidget):
             self.status_label.setText("Analysiere Video-Frames...")
             self.progress_bar.setVisible(True)
             self.progress_bar.setValue(0)
+            analyzed_frame_count = 0
             
             # YOLO-based pupil detection pipeline
             analyzer = PupilAnalyzer()
@@ -308,6 +322,7 @@ class PLRTestScreen(QWidget):
                 frame_pool=1,
                 max_frames=None
             )
+            analyzed_frame_count = len(analyzer.pupil_frames)
             
             # Pick 9 evenly spaced frames for grid display
             valid_frames = [pf for pf in analyzer.pupil_frames
@@ -383,12 +398,39 @@ class PLRTestScreen(QWidget):
                     metrics = analyzer.calculate_plr_metrics(
                         light_start_frame, light_end_frame
                     )
+                    metrics_dict = self._metrics_to_dict(metrics)
+                    self._save_analysis_results(
+                        metrics=metrics_dict,
+                        light_stimulus_start_frame=light_start_frame,
+                        light_stimulus_end_frame=light_end_frame,
+                        frame_count=analyzed_frame_count,
+                        analyzed_frame_count=analyzed_frame_count,
+                        status="completed",
+                    )
                     self._emit_results(metrics)
                 else:
+                    self._save_analysis_results(
+                        metrics=None,
+                        light_stimulus_start_frame=light_start_frame,
+                        light_stimulus_end_frame=light_end_frame,
+                        frame_count=analyzed_frame_count,
+                        analyzed_frame_count=analyzed_frame_count,
+                        status="failed",
+                        error_message="Not enough frames for PLR calculation.",
+                    )
                     self.plr_results_ready.emit({'error': 'Not enough frames for PLR calculation.'})
                     
             except Exception as e:
                 logger.warning(f"PLR metrics calculation failed: {e}")
+                self._save_analysis_results(
+                    metrics=None,
+                    light_stimulus_start_frame=None,
+                    light_stimulus_end_frame=None,
+                    frame_count=analyzed_frame_count,
+                    analyzed_frame_count=analyzed_frame_count,
+                    status="failed",
+                    error_message=str(e),
+                )
                 self.plr_results_ready.emit({'error': f'PLR calculation error: {str(e)}'})
             
             # === BASELINE COMPARISON PLOT (also analyze all frames) ===
@@ -421,9 +463,93 @@ class PLRTestScreen(QWidget):
             logger.error(f"Analysis error: {e}")
             import traceback
             traceback.print_exc()
+            self._save_analysis_results(
+                metrics=None,
+                light_stimulus_start_frame=None,
+                light_stimulus_end_frame=None,
+                frame_count=0,
+                analyzed_frame_count=0,
+                status="failed",
+                error_message=str(e),
+            )
             self.status_label.setText(f"Fehler: {str(e)}")
             self.progress_bar.setVisible(False)
     
+    def _get_db_manager(self) -> Optional[PatientDataManager]:
+        """Lazy database manager initialization for analysis persistence."""
+        if self._db_manager is None:
+            try:
+                self._db_manager = PatientDataManager(Path("data/eyecon.db"))
+            except Exception as e:
+                logger.warning(f"Could not initialize database manager: {e}")
+                self._db_manager = None
+        return self._db_manager
+
+    def _save_analysis_results(
+        self,
+        metrics: Optional[Dict[str, float]],
+        light_stimulus_start_frame: Optional[int],
+        light_stimulus_end_frame: Optional[int],
+        frame_count: int,
+        analyzed_frame_count: int,
+        status: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Persist PLR metrics and analysis session (minimal persistence variant)."""
+        recording_id = self.current_recording_id or self.current_video_path
+        if not recording_id:
+            logger.warning("Skipping analysis persistence: missing recording ID")
+            return
+
+        db = self._get_db_manager()
+        if db is None:
+            return
+
+        try:
+            if status == "completed" and metrics is not None:
+                save_ok = db.save_plr_metrics(
+                    recording_id=recording_id,
+                    metrics=metrics,
+                    light_stimulus_start_frame=int(light_stimulus_start_frame),
+                    light_stimulus_end_frame=int(light_stimulus_end_frame),
+                )
+                if not save_ok:
+                    logger.warning(f"Could not save PLR metrics for recording {recording_id}")
+
+            session_id = db.create_analysis_session(
+                recording_id=recording_id,
+                frame_count=frame_count,
+                analyzed_frame_count=analyzed_frame_count,
+                status=status,
+                error_message=error_message,
+            )
+            if session_id == -1:
+                logger.warning(f"Could not create analysis session for recording {recording_id}")
+        except Exception as e:
+            logger.warning(f"Persistence error for recording {recording_id}: {e}")
+
+    def _metrics_to_dict(self, metrics) -> Dict[str, float]:
+        """Normalize PLR metrics object to dictionary for UI and DB."""
+        return {
+            'baseline_mean': metrics.baseline_mean,
+            'baseline_max': metrics.baseline_max,
+            'baseline_min': metrics.baseline_min,
+            'latency': metrics.latency,
+            'latency_frame_idx': metrics.latency_frame_idx,
+            'peak_constriction_velocity': metrics.peak_constriction_velocity,
+            'peak_constriction_velocity_frame': metrics.peak_constriction_velocity_frame,
+            'average_constriction_velocity': metrics.average_constriction_velocity,
+            'minimum_diameter': metrics.minimum_diameter,
+            'minimum_diameter_frame': metrics.minimum_diameter_frame,
+            'amplitude': metrics.amplitude,
+            'peak_dilation_velocity': metrics.peak_dilation_velocity,
+            'peak_dilation_velocity_frame': metrics.peak_dilation_velocity_frame,
+            'average_dilation_velocity': metrics.average_dilation_velocity,
+            'prt_50': metrics.prt_50,
+            'prt_63': metrics.prt_63,
+            'prt_75': metrics.prt_75,
+        }
+
     def display_frame_grid(self):
         """Display extracted frames in grid layout."""
         # Clear previous grid
@@ -559,23 +685,5 @@ class PLRTestScreen(QWidget):
 
     def _emit_results(self, metrics):
         """Package PLR metrics as dict and emit signal for RightArea display."""
-        results = {
-            'baseline_mean': metrics.baseline_mean,
-            'baseline_max': metrics.baseline_max,
-            'baseline_min': metrics.baseline_min,
-            'latency': metrics.latency,
-            'latency_frame_idx': metrics.latency_frame_idx,
-            'peak_constriction_velocity': metrics.peak_constriction_velocity,
-            'peak_constriction_velocity_frame': metrics.peak_constriction_velocity_frame,
-            'average_constriction_velocity': metrics.average_constriction_velocity,
-            'minimum_diameter': metrics.minimum_diameter,
-            'minimum_diameter_frame': metrics.minimum_diameter_frame,
-            'amplitude': metrics.amplitude,
-            'peak_dilation_velocity': metrics.peak_dilation_velocity,
-            'peak_dilation_velocity_frame': metrics.peak_dilation_velocity_frame,
-            'average_dilation_velocity': metrics.average_dilation_velocity,
-            'prt_50': metrics.prt_50,
-            'prt_63': metrics.prt_63,
-            'prt_75': metrics.prt_75,
-        }
+        results = self._metrics_to_dict(metrics)
         self.plr_results_ready.emit(results)

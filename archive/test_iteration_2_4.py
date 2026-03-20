@@ -26,13 +26,13 @@ main_layout.addWidget(info_label)
 # PatientListWidget
 patient_list = PatientListWidget()
 
-print("✓ PatientListWidget erstellt")
+print("PatientListWidget erstellt")
 
 # Füge Test-Patienten hinzu
 print("\nFüge Patienten hinzu:")
 for patient_data in test_patients:
     patient_list.add_patient(patient_data)
-    print(f"  ✓ Patient {patient_data['id']}: {patient_data['nachname']}, {patient_data['name']}")
+    print(f"  Patient {patient_data['id']}: {patient_data['nachname']}, {patient_data['name']}")
 
 # === ITERATION 2.4: Signal-Handler ===
 # Dependency: Signal.connect()
@@ -46,12 +46,12 @@ def on_patient_selected(patient_id: int):
             break
     
     if patient:
-        message = f"✓ Patient ausgewählt: {patient['nachname']}, {patient['name']} (ID: {patient_id})"
-        print(f"  → {message}")
+        message = f"Patient ausgewählt: {patient['nachname']}, {patient['name']} (ID: {patient_id})"
+        print(f"  -> {message}")
         info_label.setText(message)
 
 patient_list.patient_selected.connect(on_patient_selected)
-print("\n✓ Signal-Verbindung eingerichtet: patient_selected.connect(on_patient_selected)")
+print("\nSignal-Verbindung eingerichtet: patient_selected.connect(on_patient_selected)")
 
 # Button-Layout zum Testen der remove_patient Funktion
 button_layout = QHBoxLayout()
@@ -61,7 +61,7 @@ def remove_patient_2():
     patient_list.remove_patient(2)
     remove_btn.setEnabled(False)
     info_label.setText("Patient 2 wurde entfernt")
-    print("  → Patient 2 wurde entfernt")
+    print("  -> Patient 2 wurde entfernt")
 
 remove_btn.clicked.connect(remove_patient_2)
 button_layout.addWidget(remove_btn)
@@ -72,7 +72,7 @@ def clear_all():
     clear_btn.setEnabled(False)
     remove_btn.setEnabled(False)
     info_label.setText("Alle Patienten wurden gelöscht")
-    print("  → Alle Patienten wurden gelöscht")
+    print("  -> Alle Patienten wurden gelöscht")
 
 clear_btn.clicked.connect(clear_all)
 button_layout.addWidget(clear_btn)
@@ -84,7 +84,7 @@ window.setLayout(main_layout)
 window.resize(400, 500)
 window.show()
 
-print("\n✓ Fenster angezeigt.")
+print("\nFenster angezeigt.")
 print("  - Klicke auf einen Patient um zu selektieren")
 print("  - Buttons oben zum Entfernen testen\n")
 

@@ -39,17 +39,17 @@ for patient_data in test_patients:
     btn = PatientButton(patient_data)
     buttons.append(btn)
     layout.addWidget(btn)
-    print(f"✓ PatientButton erstellt für: {patient_data['nachname']}, {patient_data['name']}")
+    print(f"PatientButton erstellt für: {patient_data['nachname']}, {patient_data['name']}")
 
 print("\n--- Styling Test ---")
-print("✓ Button 1 (Mustermann): Standard (nicht selektiert) = Grau")
+print("Button 1 (Mustermann): Standard (nicht selektiert) = Grau")
 buttons[0].set_selected(False)
 
-print("✓ Button 2 (Schmidt): Selektiert = Grün")
+print("Button 2 (Schmidt): Selektiert = Grün")
 buttons[1].set_selected(True)
 
 print("\n--- Signal Test ---")
-print("✓ Signal-Verbindungen eingerichtet")
+print("Signal-Verbindungen eingerichtet")
 
 # === ITERATION 2.3: Signal-Handler Setup ===
 # Dependency: Signal-Verbindung (connect)
@@ -57,7 +57,7 @@ print("✓ Signal-Verbindungen eingerichtet")
 def on_button_clicked(patient_id: int):
     """Handler wenn ein PatientButton geklickt wird"""
     message = f"Signal empfangen: Patient-ID {patient_id} geklickt!"
-    print(f"  → {message}")
+    print(f"  -> {message}")
     signal_label.setText(message)
 
 for btn in buttons:
@@ -65,9 +65,9 @@ for btn in buttons:
     # Dependency: Signal.connect() Methode
     # Verbinde Custom Signal patient_clicked mit Handler
     btn.patient_clicked.connect(on_button_clicked)
-    print(f"  ✓ patient_clicked Signal für Patient {btn.patient_id} verbunden")
+    print(f"  patient_clicked Signal für Patient {btn.patient_id} verbunden")
 
-print("\n✓ Fenster wird angezeigt mit Styling und Signals.")
+print("\nFenster wird angezeigt mit Styling und Signals.")
 print("  - Klicke auf einen Button um das Signal zu testen")
 print("  - Die Signal-Ausgabe wird im Label oben angezeigt\n")
 

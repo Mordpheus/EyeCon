@@ -25,7 +25,7 @@ layout.addWidget(result_label)
 # Dependency: QPushButton.clicked.connect()
 def open_dialog():
     """Handler für Dialog öffnen"""
-    print("\n✓ CreatePatientDialog wird geöffnet...")
+    print("\nCreatePatientDialog wird geöffnet...")
     
     # Erstelle Dialog (modal)
     dialog = CreatePatientDialog(window)
@@ -35,7 +35,7 @@ def open_dialog():
     dialog_result = dialog.exec()
     
     if dialog_result == CreatePatientDialog.Accepted:
-        print("  → Dialog: Nutzer hat 'Erstellen' geklickt")
+        print("  -> Dialog: Nutzer hat 'Erstellen' geklickt")
         
         # === ITERATION 2.5: Daten-Validierung ===
         # Dependency: get_patient_data() Methode
@@ -43,20 +43,20 @@ def open_dialog():
         patient_data = dialog.get_patient_data()
         
         if patient_data:
-            print("  → Validierung erfolgreich!")
-            result_text = f"""✓ Patient erstellt:
+            print("  -> Validierung erfolgreich!")
+            result_text = f"""Patient erstellt:
 Name: {patient_data['name']}
 Nachname: {patient_data['nachname']}
 Geburtsdatum: {patient_data['geburtsdatum']}
 
 Diese Daten würden jetzt in die Datenbank gespeichert."""
             result_label.setText(result_text)
-            print(f"  → {result_text.replace(chr(10), ' | ')}")
+            print(f"  -> {result_text.replace(chr(10), ' | ')}")
         else:
-            print("  → Validierung fehlgeschlagen!")
+            print("  -> Validierung fehlgeschlagen!")
             result_label.setText("✗ Validierung fehlgeschlagen (siehe Fehlerdialog)")
     else:
-        print("  → Dialog: Nutzer hat 'Abbrechen' geklickt")
+        print("  -> Dialog: Nutzer hat 'Abbrechen' geklickt")
         result_label.setText("Dialog wurde abgebrochen")
 
 open_btn = QPushButton("Dialog öffnen")
@@ -67,9 +67,9 @@ layout.addWidget(open_btn)
 hints = QLabel("""Test-Anleitung:
 1. Klicke 'Dialog öffnen'
 2. Teste Validierung:
-   - Leere Felder → Fehlermeldung
-   - Falsches Datumsformat (z.B. '15-03-1990') → Fehlermeldung
-   - Richtiges Format (z.B. '15.03.1990') → Erfolgreich
+   - Leere Felder -> Fehlermeldung
+   - Falsches Datumsformat (z.B. '15-03-1990') -> Fehlermeldung
+   - Richtiges Format (z.B. '15.03.1990') -> Erfolgreich
 3. Beispiel-Daten:
    Name: Max
    Nachname: Mustermann
@@ -82,6 +82,6 @@ window.setLayout(layout)
 window.resize(500, 450)
 window.show()
 
-print("✓ Fenster angezeigt. Dialog-Tests verfügbar.\n")
+print("Fenster angezeigt. Dialog-Tests verfügbar.\n")
 
 sys.exit(app.exec())

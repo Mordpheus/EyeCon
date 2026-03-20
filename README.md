@@ -5,7 +5,7 @@ EyeCon is a desktop application for pupil analysis and Pupil Light Reflex (PLR) 
 ## Features
 
 - Video preview and recording from USB/webcam
-- Automated pupil detection and diameter measurement (YOLOv8 + OpenCV)
+- Automated pupil detection and diameter measurement (YOLO + OpenCV)
 - PLR (Pupil Light Reflex) test analysis with velocity and amplitude metrics
 - Patient and session management with SQLite database
 - Interactive result plots (matplotlib)
@@ -56,7 +56,7 @@ EyeCon/
 |---|---|---|
 | PySide6 | 6.7.3+ | Qt 6 GUI framework |
 | opencv-python | 4.8.0+ | Video capture and image processing |
-| ultralytics | 8.0.0+ | YOLOv8 pupil detection |
+| ultralytics | 11.0.0+ | YOLOv11+ pupil detection |
 | torch / torchvision | 2.0.0+ / 0.15.0+ | Deep learning backend |
 | matplotlib | 3.8.0+ | Result visualization |
 | scipy | 1.11.0+ | Signal filtering |

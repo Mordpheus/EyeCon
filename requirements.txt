@@ -7,8 +7,7 @@ pyyaml>=6.0.0
 opencv-python>=4.8.0
 scipy>=1.11.0
 ultralytics>=8.4.0
-# Hinweis: Das PyPI-Paket ultralytics verwendet derzeit 8.x-Versionen,
-# kann aber trotzdem YOLO11-Modelle laden.
+# Attention:The PyPI package ultralytics currently uses 8.x versions, but it can still load YOLO11 models.
 torch>=2.0.0
 torchvision>=0.15.0
 tensorflow>=2.16.0

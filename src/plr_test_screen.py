@@ -285,7 +285,7 @@ class PLRTestScreen(QWidget):
         recording_id: str = None,
         patient_id: str = None,
     ):
-        """Load and analyze a video file with optional baseline comparison."""
+        """Video-Datei laden und analysieren, optional mit Baseline-Vergleich."""
         if not file_path:
             return
         
@@ -335,7 +335,7 @@ class PLRTestScreen(QWidget):
             else:
                 display_pupil_frames = []
             
-            # Build display data for the 9 grid thumbnails
+            # Build display data for the nine grid thumbnails, maybe rethink this later to show the best or mostly important 9 frames instead of just evenly spaced ones
             key_frames_data = []
             frame_count = 0
             cap = cv2.VideoCapture(self.current_video_path)
@@ -684,6 +684,6 @@ class PLRTestScreen(QWidget):
         self.comparison_canvas.draw()
 
     def _emit_results(self, metrics):
-        """Package PLR metrics as dict and emit signal for RightArea display."""
+        """Package PLR metrics as dict and emit signal for rightArea display."""
         results = self._metrics_to_dict(metrics)
         self.plr_results_ready.emit(results)

@@ -1,209 +1,0 @@
-======================================================================
-RASPBERRY PI UVC-GADGET DIAGNOSTICS REPORT
-======================================================================
-
-Zeitstempel: 2026-02-02 15:12:25.971559
-Serial Port: COM3
-Baud Rate: 9600
-
-----------------------------------------------------------------------
-BEFEHL: STATUS
-ZEIT: 2026-02-02T15:12:08.944389
-----------------------------------------------------------------------
-Serial verbunden: COM3
-
-----------------------------------------------------------------------
-BEFEHL: systemctl status uvc-gadget.service
-ZEIT: 2026-02-02T15:12:10.447489
-----------------------------------------------------------------------
-systemctl status uvc-gadget.service
-[?2004l○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-        CPU: 113ms[m
-[m
-Dec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[7mlines 1-13/13 (END)[27m[K
-
-----------------------------------------------------------------------
-BEFEHL: systemctl status webcam.service
-ZEIT: 2026-02-02T15:12:12.450847
-----------------------------------------------------------------------
-[K-[Klog file: [Kyy[Kss[Ktt[Kee[Kmm[Kcc[Ktt[Kll[K  [Kss[Ktt[Kaa[Ktt[Kuu[Kss[K  [Kww[Kee[Kbb[Kcc[Kaa[Kmm[K..[Kss[Kee[Krr[Kvv[Kii[Kcc[Kee[K[K[7mlines 1-13/13 (END)[27m[K
-
-----------------------------------------------------------------------
-BEFEHL: sudo journalctl -u uvc-gadget.service -n 20
-ZEIT: 2026-02-02T15:12:14.953056
-----------------------------------------------------------------------
-[K-[Klog file: [Kuu[Kdd[Koo[K  [Kjj[Koo[Kuu[Krr[Knn[Kaa[Kll[Kcc[Ktt[Kll[K  [K--[Kuu[K  [Kuu[Kvv[Kcc[K--[Kgg[Kaa[Kdd[Kgg[Kee[Ktt[K..[Kss[Kee[Krr[Kvv[Kii[Kcc[Kee[K  [K--[Knn[K  [K22[K00[K...skipping...
-○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-        CPU: 113ms[m
-[m
-Dec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[K[7mLog file is already in use  (press RETURN)[27m
-
-----------------------------------------------------------------------
-BEFEHL: sudo journalctl -u webcam.service -n 20
-ZEIT: 2026-02-02T15:12:17.455935
-----------------------------------------------------------------------
-[24;1H[K[K-[Klog file: [Kuu[Kdd[Koo[K  [Kjj[Koo[Kuu[Krr[Knn[Kaa[Kll[Kcc[Ktt[Kll[K  [K--[Kuu[K  [Kww[Kee[Kbb[Kcc[Kaa[Kmm[K..[Kss[Kee[Krr[Kvv[Kii[Kcc[Kee[K  [K--[Knn[K  [K22[K00[K[K[7mLog file is already in use  (press RETURN)[27m
-
-----------------------------------------------------------------------
-BEFEHL: vcgencmd get_camera
-ZEIT: 2026-02-02T15:12:18.959581
-----------------------------------------------------------------------
-[24;1H[K[K[7mCannot edit standard input  (press RETURN)[27m[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K[K/[K[K[7mNo previous regular expression  (press RETURN)[27m[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[Kset mark: ...skipping...
-○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-        CPU: 113ms[m
-[m
-Dec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K[K[7mNo next tag  (press RETURN)[27m[24;1H[K[K_[K[7mRepaint by scrolling from bottom of screen  (press RETURN)[27m[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[Kset mark: ...skipping...
-○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-        CPU: 113ms[m
-[m
-Dec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[7mlines 1-13/13 (END)[27m[K[K...skipping...
-○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-        CPU: 113ms[m
-[m
-Dec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-Dec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-Dec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[1m~[0m
-[7mlines 1-13/13 (END)[27m[K[K[7mlines 1-13/13 (END)[27m[K[K[K[7mlines 1-13/13 (END)[27m[K
-
-----------------------------------------------------------------------
-BEFEHL: ls -la /dev/video*
-ZEIT: 2026-02-02T15:12:20.461781
-----------------------------------------------------------------------
-[K[7mlines 1-13/13 (END)[27m[K[K-[Klog file: [K  [K--[Kll[Kaa[K  [K//[Kdd[Kee[Kvv[K//[Kvv[Kii[Kdd[Kee[Koo[K**[K[K[7mLog file is already in use  (press RETURN)[27m
-
-----------------------------------------------------------------------
-BEFEHL: lsmod | grep uvc
-ZEIT: 2026-02-02T15:12:21.964643
-----------------------------------------------------------------------
-[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[K-[Klog file: [Kmm[Koo[Kdd[K  [K||[K  [Kgg[Krr[Kee[Kpp[K  [Kuu[Kvv[Kcc[K[K[7mLog file is already in use  (press RETURN)[27m
-
-----------------------------------------------------------------------
-BEFEHL: cat /sys/kernel/debug/usb_gadget/g1/UDC
-ZEIT: 2026-02-02T15:12:23.466805
-----------------------------------------------------------------------
-[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[K[7mlines 1-13/13 (END)[27m[K[K[7mNo next tag  (press RETURN)[27m[24;1H[K[K[7mlines 1-13/13 (END)[27m[K[K/[Kss[Kyy[Kss[K//[Kkk[Kee[Krr[Knn[Kee[Kll[K//[Kdd[Kee[Kbb[Kuu[Kgg[K//[Kuu[Kss[Kbb[K__[Kgg[Kaa[Kdd[Kgg[Kee[Ktt[K//[Kgg[K11[K//[KUU[KDD[KCC[K[1;1H○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-[2;1H     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-[3;1H     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-[4;1H    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-[5;1H   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-[6;1H        CPU: 113ms[m
-[7;1H[m
-[8;1HDec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-[9;1HDec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-[10;1HDec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-[11;1HDec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-[12;1HDec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-[13;1HDec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[14;1H[1m~[0m
-[24;1H[1;1H○ uvc-gadget.service - Configure Raspberry Pi as a UVC gadget[m
-[2;1H     Loaded: loaded (]8;;file://Pi-Zero-2W/etc/systemd/system/uvc-gadget.service/etc/systemd/system/uvc-gadget.service]8;;; [0;1;32menabled[0m; preset: [0;1;32me[m[7m>[27m
-[3;1H     Active: inactive (dead) since Wed 2025-12-03 05:31:37 CET; 26min ago[m
-[4;1H    Process: 401 ExecStart=/home/pi/PLR-Headset/scripts/uvc-gadget.sh (code=exi[m[7m>[27m
-[5;1H   Main PID: 401 (code=exited, status=0/SUCCESS)[m
-[6;1H        CPU: 113ms[m
-[7;1H[m
-[8;1HDec 03 05:31:36 Pi-Zero-2W systemd[1]: Starting uvc-gadget.service - Configure [m[7m>[27m
-[9;1HDec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget webcam [m[7m>[27m
-[10;1HDec 03 05:31:36 Pi-Zero-2W uvc-gadget-config[401]:         Creating UVC gadget [m[7m>[27m
-[11;1HDec 03 05:31:37 Pi-Zero-2W uvc-gadget-config[401]: Configure USB gadget serial [m[7m>[27m
-[12;1HDec 03 05:31:37 Pi-Zero-2W systemd[1]: uvc-gadget.service: Deactivated successf[m[7m>[27m
-[13;1HDec 03 05:31:37 Pi-Zero-2W systemd[1]: Finished uvc-gadget.service - Configure [m[7m>[27m
-[14;1H[1m~[0m
-[24;1H[K[7mPattern not found  (press RETURN)[27m
-
-----------------------------------------------------------------------
-BEFEHL: ps aux | grep -E 'uvc|camera|mjpeg'
-ZEIT: 2026-02-02T15:12:25.469926
-----------------------------------------------------------------------
-[24;1H[K[K[K[7mlines 1-13/13 (END)[27m[K[K-[Klog file: [K  [Kaa[Kuu[Kxx[K  [K||[K  [Kgg[Krr[Kee[Kpp[K  [K--[KEE[K  [K''[Kuu[Kvv[Kcc[K||[Kcc[Kaa[Kmm[Kee[Krr[Kaa[K||[Kmm[Kjj[Kpp[Kee[Kgg[K''[K[K[7mLog file is already in use  (press RETURN)[27m
-
-======================================================================
-ENDE REPORT
-======================================================================

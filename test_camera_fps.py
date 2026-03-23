@@ -1,7 +1,9 @@
 """
 Camera FPS Test
 ===============
-Measures the actual frame rate of connected cameras.
+Purpose is to test if the connected camera has at least 30FPS
+everything below that would not be enough for detecting the PLR-Analysis requirements.
+Measures the actual frame rate of connected cameras. 
 Tests both the reported FPS (from driver) and the real measured FPS.
 """
 import cv2
@@ -83,7 +85,7 @@ def test_camera_fps(device_index: int = 0, test_duration: float = 5.0,
             real_fps = (frame_count - 1) / elapsed
             avg_interval_ms = (elapsed / (frame_count - 1)) * 1000
 
-            # Calculate jitter (standard deviation of frame intervals)
+            # Calculate jitter (means standard deviation of frame intervals)
             intervals = [frame_times[i+1] - frame_times[i]
                          for i in range(len(frame_times) - 1)]
             import statistics

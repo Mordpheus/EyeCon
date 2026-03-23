@@ -203,7 +203,7 @@ class PupilAnalyzer:
         Run YOLO detection on a single eye crop and return a PupilFrame.
 
         Diameter is calculated from the bounding box dimensions using the
-        same formula as the TBI Android app (AnalyzerScreen.kt):
+        same formula as the PLR-Analyzer Android app referenced File (AnalyzerScreen.kt):
             diameter_px = (bbox_w_norm * crop_W + bbox_h_norm * crop_H) / 2.0
 
         The normalized bbox dimensions are scaled to crop-region pixels,
@@ -401,7 +401,21 @@ class PupilAnalyzer:
         velocity) to infer when the light turned on, accounting for
         ~200 ms PLR latency.  This is more robust than relying on
         hardcoded timestamps because the video file may not start at
-        the same moment the recording thread begins timing.
+        the same moment the recording thread begins timing. This is a
+        oint to discuss with the developers of the PLR-Analyzer, 
+        because the Android app relies on the recording thread timing to determine 
+        the light stimulus onset and offset frames. 
+        If the video file starts at a different time than the recording thread, 
+        this could lead to misalignment between the detected pupil frames and the actual stimulus timing. 
+        By analyzing the pupil diameter changes directly, we can more accurately determine when the light stimulus occurred, 
+        regardless of any discrepancies in video start time.
+        But this theorie must be tested and validated in future experiments, i think.
+        The fact that the latency is 0.00 in the tests could be an indication that the video 
+        start time and the recording thread timing are not perfectly aligned, leading to incorrect stimulus onset detection.
+        If 0.00 ms occurs only rarely, it may also be caused by frame resolution, smoothing, or rounding effects.
+        If 0.00 ms occurs frequently, it is a strong indication that the stimulus detection or the timing concept should be reviewed.
+
+        Since this function was not the priority and the focus was on pupil detection with YOLO, I will leave it as a hypothesis for now.
 
         Args:
             light_duration: Expected duration of light stimulus in seconds
@@ -479,7 +493,7 @@ class PupilAnalyzer:
     ) -> PLRMetrics:
         """
         Calculate PLR biomarkers using Bergamin-Kardon method.
-        
+        Wichtigste PLR-Parameter: Amplitude, Latency, Peak Constriction Velocity, Peak Dilation Velocity, Pupil Recovery Time (PRT)
         Args:
             light_stimulus_start_frame: Frame index when light turns on
             light_stimulus_end_frame: Frame index when light turns off
@@ -640,7 +654,7 @@ class PupilAnalyzer:
         # Step 3: First derivative
         deriv1 = np.gradient(signal_interp, t_interp[1] - t_interp[0])
         
-        # Step 4: Gaussian filter
+        # Step 4: Gaussian filter // Maybe test it later with 15? combined with another polyorder for the Savitz filter?
         deriv1_filtered = gaussian_filter1d(deriv1, sigma=25)
         
         # Step 5: Second derivative
@@ -655,7 +669,7 @@ class PupilAnalyzer:
         
         idx_interp = np.where(mask)[0][0] + idx_rel
         
-        # Map back to original frame index. After Fixx This maps the timestamp of the detected acceleration maximum directly to the nearest original frame independent of the interpolation rate. Reason why Latency 0.00 in Tests
+        # Map back to original frame index. After Fixxx This maps the timestamp of the detected acceleration maximum directly to the nearest original frame independent of the interpolation rate. Reason why Latency 0.00 in Tests
         frame_idx = int(np.argmin(np.abs(time - t_interp[idx_interp])))
         
         return frame_idx, {
@@ -677,6 +691,8 @@ class PupilAnalyzer:
         Calculate Pupil Recovery Time (PRT) at 50%, 63%, 75% recovery levels.
         
         Recovery is measured from minimum diameter back towards baseline.
+        Like in the Android app, we define thresholds as:
+        threshold = min_diameter + amplitude * recovery_level sprich 0.50, 0.63, 0.75
         """
         amplitude = baseline_mean - min_diameter
         
